@@ -119,7 +119,7 @@ install_docker_compose() {
 
 # 检查端口占用
 check_ports() {
-    local ports=(8000 5432)
+    local ports=(8090 5432)
     local conflicts=()
 
     for port in "${ports[@]}"; do
@@ -194,7 +194,7 @@ deploy_services() {
     
     while [[ $retry_count -lt $max_retries ]]; do
         if docker-compose ps | grep -q "Up"; then
-            if curl -sf http://localhost:8000/api/health > /dev/null 2>&1; then
+            if curl -sf http://localhost:8090/api/health > /dev/null 2>&1; then
                 log_success "服务启动成功！"
                 return 0
             fi
@@ -216,9 +216,9 @@ show_status() {
     echo ""
     
     log_info "==================== 服务信息 ===================="
-    log_success "应用访问地址: http://$(hostname -I | awk '{print $1}'):8000"
-    log_success "本地访问地址: http://localhost:8000"
-    log_success "健康检查: http://localhost:8000/api/health"
+    log_success "应用访问地址: http://$(hostname -I | awk '{print $1}'):8090"
+    log_success "本地访问地址: http://localhost:8090"
+    log_success "健康检查: http://localhost:8090/api/health"
     echo ""
     
     log_info "==================== 常用命令 ===================="
