@@ -1,0 +1,513 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>数据看板 - 胜率与战斗时长</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" />
+  <link rel="stylesheet" href="https://cdn.datatables.net/1.13.8/css/dataTables.bootstrap5.min.css" />
+  <style>
+    body { padding: 20px; }
+    .filters { 
+      display: grid; 
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); 
+      gap: 15px; 
+      margin-bottom: 20px;
+    }
+    .filter-group {
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+    }
+    .filter-group label {
+      font-weight: 500;
+      margin-bottom: 5px;
+    }
+    .form-select, .form-control {
+      width: 100%;
+    }
+    .form-select[multiple] {
+      height: 100px;
+      font-size: 14px;
+    }
+    .form-select[multiple] option {
+      padding: 4px 8px;
+    }
+    .server-group, .source-group { grid-column: span 2; }
+    .btn-group {
+      margin-top: 15px;
+    }
+  </style>
+</head>
+<body>
+  <h2>数据看板</h2>
+
+  <div class="mb-3">
+    <div class="filters">
+      <div class="filter-group server-group">
+        <label class="form-label">区服</label>
+        <select id="servers" class="form-select">
+          <option value="8001,8002,8004">国服圣斗服</option>
+          <option value="8024">国服怀旧</option>
+          <option value="9001">港台怀旧</option>
+          <option value="8010">公会服</option>
+        </select>
+      </div>
+      
+      <div class="filter-group source-group">
+        <label class="form-label">数据来源</label>
+        <select id="source_types" class="form-select">
+          <!-- 动态生成选项 -->
+        </select>
+      </div>
+      
+      <div class="filter-group">
+        <label class="form-label">时间范围(开始)</label>
+        <input id="start_ts" class="form-control" type="datetime-local" step="1" />
+      </div>
+      
+      <div class="filter-group">
+        <label class="form-label">时间范围(结束)</label>
+        <input id="end_ts" class="form-control" type="datetime-local" step="1" />
+      </div>
+      
+      <div class="filter-group">
+        <label class="form-label">等级范围(最小)</label>
+        <input id="min_level" class="form-control" type="number" placeholder="最小等级" />
+      </div>
+      
+      <div class="filter-group">
+        <label class="form-label">等级范围(最大)</label>
+        <input id="max_level" class="form-control" type="number" placeholder="最大等级" />
+      </div>
+      
+      <div class="filter-group">
+        <label class="form-label">职业</label>
+        <select id="clazz" class="form-select">
+          <option value="">全部职业</option>
+          <option value="1">法师</option>
+          <option value="2">弓手</option>
+          <option value="3">圣言</option>
+          <option value="4">剑骑士</option>
+          <option value="5">隐刺</option>
+          <option value="6">格斗家</option>
+          <option value="7">枪手</option>
+          <option value="8">战锤</option>
+          <option value="9">行者</option>
+          <option value="10">噬魂</option>
+          <option value="11">驯兽师</option>
+        </select>
+      </div>
+      
+      <div class="filter-group">
+        <label class="form-label">流派</label>
+        <select id="schools" class="form-select">
+          <option value="">全部流派</option>
+          <option value="0">无流派</option>
+          <option value="1">火系</option>
+          <option value="2">风系</option>
+        </select>
+      </div>
+      
+      <div class="filter-group">
+        <label class="form-label">对手职业</label>
+        <select id="opponent_class" class="form-select">
+          <option value="">全部职业</option>
+          <option value="1">法师</option>
+          <option value="2">弓手</option>
+          <option value="3">圣言</option>
+          <option value="4">剑骑士</option>
+          <option value="5">隐刺</option>
+          <option value="6">格斗家</option>
+          <option value="7">枪手</option>
+          <option value="8">战锤</option>
+          <option value="9">行者</option>
+          <option value="10">噬魂</option>
+          <option value="11">驯兽师</option>
+        </select>
+      </div>
+      
+      <div class="filter-group">
+        <label class="form-label">对手流派</label>
+        <select id="opponent_schools" class="form-select">
+          <option value="">全部流派</option>
+          <option value="0">无流派</option>
+          <option value="1">火系</option>
+          <option value="2">风系</option>
+        </select>
+      </div>
+      
+      <div class="filter-group">
+        <label class="form-label">宠物 (可多选)</label>
+        <select id="spirit_animal" class="form-select" multiple></select>
+      </div>
+
+      <div class="filter-group">
+        <label class="form-label">宠物天赋 (0=全部)</label>
+        <input id="spirit_animal_talents" class="form-control" type="number" value="0" min="0" step="1" />
+      </div>
+
+      <div class="filter-group">
+        <label class="form-label">传说符文 (可多选)</label>
+        <select id="legendary_runes" class="form-select" multiple></select>
+      </div>
+
+      <div class="filter-group">
+        <label class="form-label">超能战甲</label>
+        <select id="super_armor" class="form-select"></select>
+      </div>
+      
+      <div class="filter-group">
+        <label class="form-label">指标</label>
+        <select id="metric" class="form-select">
+          <option value="winrate">胜率</option>
+          <option value="duration">时长</option>
+        </select>
+      </div>
+      
+      <div class="filter-group">
+        <label class="form-label">按对手细分</label>
+        <select id="group_by_opponent" class="form-select">
+          <option value="false">否</option>
+          <option value="true">是</option>
+        </select>
+      </div>
+    </div>
+    
+    <div class="btn-group">
+      <button id="btnQuery" class="btn btn-primary me-2">查询</button>
+      <button id="btnExport" class="btn btn-outline-secondary">导出CSV</button>
+    </div>
+  </div>
+
+  <table id="tbl" class="table table-striped" style="width:100%"></table>
+
+  <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+  <script src="https://cdn.datatables.net/1.13.8/js/jquery.dataTables.min.js"></script>
+  <script src="https://cdn.datatables.net/1.13.8/js/dataTables.bootstrap5.min.js"></script>
+  <script>
+    let table;
+    let lastSort = '';
+    let isFetching = false;
+
+    // 动态限制“数据来源”下拉：胜率只显示1/2/3/7，时长只显示4/5/6/8
+    const SOURCE_BY_METRIC = {
+      winrate: [
+        { value: '1', text: '冠军联赛胜率' },
+        { value: '2', text: '武道大会(车轮战首场)胜率' },
+        { value: '3', text: '决斗天梯胜率' },
+        { value: '7', text: '武道大会非车轮战胜率(低优先级)' },
+      ],
+      duration: [
+        { value: '4', text: '冠军联赛战斗时长' },
+        { value: '5', text: '武道大会(车轮战首场)战斗时长' },
+        { value: '6', text: '决斗天梯战斗时长' },
+        { value: '8', text: '武道大会非车轮战战斗时长(低优先级)' },
+      ],
+    };
+
+    // 宠物/符文/战甲选项映射
+    const PET_OPTIONS = [
+      [1001,'骑士犬'],[1002,'忍牙'],[1003,'圣锤之力'],[1004,'风灵小白'],[1005,'飞影'],[1006,'忧郁的盹盹'],[1007,'风暴青鸾'],[1008,'熊猫大侠'],[1009,'幻影'],[1010,'苍穹疾风龙'],[1011,'银月'],[1012,'疾风剑心'],[1013,'寒霜虎'],[1014,'圣天使'],[1015,'犬夜叉'],[1016,'沧海白龙'],
+      [2001,'灯笼花妖'],[2002,'神枪手砰砰'],[2003,'红玉精灵'],[2004,'诡术士'],[2005,'元素之蝶'],[2006,'神木守望者'],[2007,'火灵娜迦'],[2008,'苍穹之翼'],[2009,'死亡执政官'],[2010,'灼热炎斗龙'],[2011,'元素幽狐'],[2012,'烈焰火舞'],[2013,'炎之领主'],[2014,'冯宝宝'],[2015,'许褚'],[2017,'贪狼星'],
+      [3001,'牙牙'],[3002,'暴雪战熊'],[3003,'誓约骑士'],[3004,'岩石巨人'],[3005,'虎魄'],[3006,'守护金刚'],[3007,'暴雪兔'],[3008,'甜心绒猫'],[3009,'自然之灵'],[3010,'钻石星尘龙'],[3011,'冰甲熊'],[3012,'精灵神龙'],[30120,'精灵龙·初诞'],[3013,'宝石魔像'],[3014,'帕拉丁'],[3015,'天兆鹿'],[3016,'熔岩暴龙'],[3017,'蓝波王'],[3018,'霜晶翼龙'],
+      [4001,'岚龙'],[4002,'恶魔之子'],[4003,'不灭之火'],[4004,'极焱剑豪'],[4005,'九尾天狐'],[4006,'御兽之王'],[4007,'海洋之灵'],
+      [5001,'豺狼座'],[5002,'天鹤座'],[5003,'御夫座'],[5004,'天马座'],[5005,'小羊座'],[5006,'小龙座'],[5007,'仙女座'],[5008,'天鹅座']
+    ];
+
+    const RUNE_OPTIONS = [
+      [26007,'暗忍星'],[26007,'最强音狐'],[26007,'断罪邪铃'],[26007,'贪婪之罪：班'],
+      [26003,'森林女皇'],[26003,'奇门阵法'],
+      [26002,'女武神'],[26002,'丹歌惊鸿'],[26002,'暴食之罪：玛琳'],
+      [26009,'永望月神'],[26009,'喵喵守护神'],[26009,'广寒仙子'],
+      [26006,'复苏神女'],[26006,'清莲圣女'],[26006,'赦免蔷薇'],
+      [26008,'英雄王'],[26008,'龙之支配者'],
+      [26001,'亚瑟王'],[26001,'烈火将军'],
+      [26010,'时间之神'],[26010,'流沙女皇'],[26010,'训导主任'],
+      [26011,'炎狱莲华'],[26011,'幻彩娜塔'],[26011,'天兆之女'],
+      [26012,'命运律者'],[26012,'玉妃引'],[26012,'纯白誓约'],
+      [26013,'无间修罗'],[26013,'龙震九霄'],[26013,'最强女仆']
+    ];
+
+    const ARMOR_OPTIONS = [
+      [340001,'耶梦加得炮'],[340002,'真·耶梦加得炮'],[340101,'耶梦加得炮'],[340111,'真·耶梦加得炮'],
+      [340003,'蓝·耶梦加得炮'],[340004,'红·耶梦加得炮'],[340005,'银·耶梦加得炮'],
+      [340121,'达摩克利斯之剑'],[340131,'真·达摩克利斯之剑'],[340141,'达摩克利斯之剑·橙'],[340151,'达摩克利斯之剑·金'],[340201,'达摩克利斯之剑·深空彼岸'],
+      [340161,'米迦勒之翼'],[340171,'真·米迦勒之翼'],[340181,'米迦勒之翼·红'],[340191,'米迦勒之翼·浩瀚苍穹'],[340241,'米迦勒之翼·大天使长'],[340251,'米迦勒之翼·圣天使长'],[340261,'米迦勒之翼·光耀逐日'],[340281,'米迦勒之翼·虚空之翼'],
+      [340210,'路西法之眼'],[340220,'真·路西法之眼'],[340230,'路西法之眼·红'],[340270,'路西法之眼·黑金'],[340290,'路西法之眼·黑绿'],
+      [340330,'真·奥古斯之盾'],[340340,'奥古斯之盾·猩红泰坦'],[340350,'奥古斯之盾·紫镜霜华'],[340360,'奥古斯之盾·烬焱龙铠'],
+      [340430,'真·昆古尼尔圣枪'],[340440,'真·昆古尼尔圣枪·圣光裁决']
+    ];
+
+    function populateOptions(selectId, list, withAll=false, allText='全部') {
+      const sel = document.getElementById(selectId);
+      while (sel.firstChild) sel.removeChild(sel.firstChild);
+      if (withAll) {
+        const optAll = document.createElement('option');
+        optAll.value = '';
+        optAll.textContent = allText;
+        sel.appendChild(optAll);
+      }
+      list.forEach(([val, text]) => {
+        const opt = document.createElement('option');
+        opt.value = String(val);
+        opt.textContent = text;
+        sel.appendChild(opt);
+      });
+    }
+
+    function resetSourceTypesOptions(metric) {
+      const select = document.getElementById('source_types');
+      const prev = new Set(Array.from(select.selectedOptions).map(opt => opt.value));
+      while (select.firstChild) select.removeChild(select.firstChild);
+      const list = SOURCE_BY_METRIC[metric] || [];
+      list.forEach(item => {
+        const option = document.createElement('option');
+        option.value = item.value;
+        option.textContent = item.text;
+        if (prev.has(item.value)) option.selected = true;
+        select.appendChild(option);
+      });
+    }
+
+    // 职业 -> 流派 映射（与后端一致 (school_id, class_id) 名称）
+    const CLASS_SCHOOLS = {
+      1: [ {id:0,name:'魔导'}, {id:1,name:'火术士'}, {id:2,name:'冰法师'} ],
+      2: [ {id:0,name:'弓手'}, {id:1,name:'神射手'}, {id:2,name:'风语者'} ],
+      3: [ {id:0,name:'圣言'}, {id:1,name:'审判者'}, {id:2,name:'白贤者'} ],
+      4: [ {id:0,name:'剑骑士'}, {id:1,name:'守护者'}, {id:2,name:'毁灭者'} ],
+      5: [ {id:0,name:'隐刺'}, {id:1,name:'瞬杀者'}, {id:2,name:'影舞者'} ],
+      6: [ {id:0,name:'格斗家'}, {id:1,name:'阿修罗'}, {id:2,name:'气功师'} ],
+      7: [ {id:0,name:'枪手'}, {id:1,name:'枪炮师'}, {id:2,name:'指挥官'} ],
+      8: [ {id:0,name:'战锤'}, {id:1,name:'终结者'}, {id:2,name:'征服者'} ],
+      9: [ {id:0,name:'行者'}, {id:1,name:'炎斗流'}, {id:2,name:'幻武流'} ],
+      10:[ {id:0,name:'噬魂'}, {id:1,name:'虹吸流'}, {id:2,name:'献祭流'} ],
+      11:[ {id:0,name:'驯兽师'}, {id:1,name:'万兽王'}, {id:2,name:'通灵王'} ],
+    };
+
+    function resetSchoolOptions(selectEl, clazzVal) {
+      while (selectEl.firstChild) selectEl.removeChild(selectEl.firstChild);
+      const optAll = document.createElement('option');
+      optAll.value = '';
+      optAll.textContent = '全部流派';
+      selectEl.appendChild(optAll);
+      const clazz = parseInt(clazzVal, 10);
+      if (!clazz || Number.isNaN(clazz) || !CLASS_SCHOOLS[clazz]) return;
+      CLASS_SCHOOLS[clazz].forEach(item => {
+        const opt = document.createElement('option');
+        opt.value = String(item.id);
+        opt.textContent = item.name;
+        selectEl.appendChild(opt);
+      });
+    }
+
+    function buildParams() {
+      const get = id => document.getElementById(id).value.trim();
+      const getMulti = id => Array.from(document.getElementById(id).selectedOptions).map(o => o.value).filter(Boolean);
+      const getSingle = id => {
+        const select = document.getElementById(id);
+        const val = select.value;
+        // 支持选项中包含逗号（如 8001,8002,8004），需要展开
+        if (val && val.includes(',')) {
+          return val.split(',').map(s => s.trim()).filter(Boolean);
+        }
+        return val ? [val] : [];
+      };
+      const params = new URLSearchParams();
+      const setIf = (k, v) => { if (v) params.set(k, v); };
+      const setMultiple = (k, v) => { if (v && v.length > 0) params.set(k, v.join(',')); };
+
+      // 时间转换：datetime-local -> 时间戳
+      const startTs = document.getElementById('start_ts').value;
+      const endTs = document.getElementById('end_ts').value;
+      if (startTs) {
+        params.set('start_ts', Math.floor(new Date(startTs).getTime() / 1000));
+      }
+      if (endTs) {
+        params.set('end_ts', Math.floor(new Date(endTs).getTime() / 1000));
+      }
+
+      setMultiple('servers', getSingle('servers'));
+      setIf('min_level', get('min_level'));
+      setIf('max_level', get('max_level'));
+      setIf('clazz', get('clazz'));
+      setIf('schools', get('schools'));
+      setIf('opponent_class', get('opponent_class'));
+      setIf('opponent_schools', get('opponent_schools'));
+      setMultiple('spirit_animal', getMulti('spirit_animal'));
+      const talentVal = document.getElementById('spirit_animal_talents').value;
+      if (talentVal && talentVal !== '0') {
+        params.set('spirit_animal_talents', talentVal);
+      }
+      setMultiple('legendary_runes', getMulti('legendary_runes'));
+      setIf('super_armor', get('super_armor'));
+      setIf('source_types', get('source_types'));
+      const gbo = document.getElementById('group_by_opponent').value;
+      params.set('group_by_opponent', gbo);
+      return params;
+    }
+
+    function buildColumns(metric, groupByOpponent) {
+      const base = [
+        { title: '区服', data: 'server_name' },
+        { title: '职业流派', data: 'class_schools_name' },
+        { title: '数据来源', data: 'source_type_name' },
+      ];
+      if (groupByOpponent) {
+        base.push({ title: '对手职业流派', data: 'opponent_class_schools_name' });
+      }
+      if (metric === 'winrate') {
+        base.push({ title: '胜场', data: 'win_count' });
+        base.push({ title: '负场', data: 'lose_count' });
+        base.push({ title: '场次', data: 'match_count' });
+        base.push({ title: '胜率', data: 'win_rate', render: d => (d*100).toFixed(2)+'%' });
+      } else {
+        base.push({ title: '平均时长(s)', data: 'avg_duration', render: d => d?.toFixed ? d.toFixed(2) : d });
+        base.push({ title: '最大时长(s)', data: 'max_duration' });
+        base.push({ title: '最小时长(s)', data: 'min_duration' });
+        base.push({ title: '中位数(s)', data: 'median_duration', render: d => d?.toFixed ? d.toFixed(2) : d });
+      }
+      return base;
+    }
+
+    function collectServerSort() {
+      // DataTables支持多列排序，Shift点击表头即可；这里读取排序传给后端
+      const order = table?.order?.() || [];
+      // 将列名映射到后端字段
+      const headers = table.settings().init().columns.map(c => c.data);
+      const toField = name => ({
+        'server_name':'server','class_schools_name':'class','source_type_name':'source_type',
+        'opponent_class_schools_name':'opponent_class',
+        'win_count':'win_count','lose_count':'lose_count','match_count':'match_count','win_rate':'win_rate',
+        'avg_duration':'avg_duration','max_duration':'max_duration','min_duration':'min_duration','median_duration':'median_duration'
+      })[name] || name;
+      const parts = order.map(([colIdx, dir]) => toField(headers[colIdx]) + ':' + dir);
+      return parts.join(',');
+    }
+
+    async function query() {
+      const metric = document.getElementById('metric').value;
+      const params = buildParams();
+      const groupByOpponent = (params.get('group_by_opponent')==='true');
+
+      const columns = buildColumns(metric, groupByOpponent);
+      // 初始化或重建表
+      if (table) {
+        // 解除旧事件监听，避免重复触发
+        $('#tbl').off('order.dt');
+        table.destroy();
+        document.getElementById('tbl').innerHTML = '';
+      }
+      table = new $.fn.dataTable.Api($('#tbl').DataTable({
+        columns,
+        data: [],
+        order: [], // 默认不排序，由用户点击决定（支持Shift多列）
+        pageLength: 100, // 默认显示100条记录
+        lengthMenu: [[10, 25, 50, 100, 200, -1], [10, 25, 50, 100, 200, "全部"]], // 自定义每页显示选项
+        language: {
+          lengthMenu: "显示 _MENU_ 条记录",
+          info: "显示第 _START_ 到 _END_ 条记录，共 _TOTAL_ 条",
+          infoEmpty: "显示第 0 到 0 条记录，共 0 条",
+          infoFiltered: "(从 _MAX_ 条记录中筛选)",
+          search: "搜索:",
+          paginate: {
+            first: "首页",
+            last: "末页",
+            next: "下一页",
+            previous: "上一页"
+          }
+        }
+      }));
+
+      // 首次拉取
+      const url = '/api/stats/' + (metric === 'winrate' ? 'winrate' : 'duration') + '?' + params.toString();
+      isFetching = true;
+      try {
+        const res = await fetch(url);
+        const json = await res.json();
+        table.clear();
+        table.rows.add(json.data || []);
+        table.draw();
+      } finally {
+        isFetching = false;
+      }
+
+      // 排序改变时，触发服务端排序重查（可选）
+      $('#tbl').on('order.dt', async function() {
+        if (isFetching) return; // 防抖：进行中的请求不重复发起
+        const sort = collectServerSort();
+        if (sort === lastSort) return; // 与上次相同则忽略
+        lastSort = sort;
+        const url2 = url + (sort ? ('&sort=' + encodeURIComponent(sort)) : '');
+        isFetching = true;
+        try {
+          const r2 = await fetch(url2);
+          const j2 = await r2.json();
+          table.clear();
+          table.rows.add(j2.data || []);
+          table.draw(false);
+        } finally {
+          isFetching = false;
+        }
+      });
+    }
+
+    async function doExport() {
+      const metric = document.getElementById('metric').value;
+      const params = buildParams();
+      const sort = collectServerSort();
+      if (sort) params.set('sort', sort);
+      params.set('metric', metric);
+      const url = '/api/export/csv?' + params.toString();
+      window.location.href = url;
+    }
+
+    document.getElementById('btnQuery').addEventListener('click', query);
+    document.getElementById('btnExport').addEventListener('click', doExport);
+
+    // 绑定 metric 切换时动态刷新"数据来源"选项
+    document.addEventListener('DOMContentLoaded', () => {
+      const metricSel = document.getElementById('metric');
+      const apply = () => {
+        resetSourceTypesOptions(metricSel.value);
+        // 默认选中第一个选项（冠军联赛胜率/时长）
+        const firstOption = document.querySelector('#source_types option');
+        if (firstOption) firstOption.selected = true;
+      };
+      metricSel.addEventListener('change', apply);
+      apply();
+    });
+
+    // 初始化 宠物/符文/战甲 下拉
+    document.addEventListener('DOMContentLoaded', () => {
+      populateOptions('spirit_animal', PET_OPTIONS);
+      populateOptions('legendary_runes', RUNE_OPTIONS);
+      populateOptions('super_armor', ARMOR_OPTIONS, true, '全部');
+    });
+
+    // 绑定职业变化时动态更新流派下拉
+    document.addEventListener('DOMContentLoaded', () => {
+      const clazzSel = document.getElementById('clazz');
+      const schoolSel = document.getElementById('schools');
+      const oClazzSel = document.getElementById('opponent_class');
+      const oSchoolSel = document.getElementById('opponent_schools');
+
+      const onClazzChange = () => {
+        resetSchoolOptions(schoolSel, clazzSel.value);
+      };
+      const onOClazzChange = () => {
+        resetSchoolOptions(oSchoolSel, oClazzSel.value);
+      };
+
+      clazzSel.addEventListener('change', onClazzChange);
+      oClazzSel.addEventListener('change', onOClazzChange);
+
+      // 初始化
+      onClazzChange();
+      onOClazzChange();
+    });
+  </script>
+</body>
+</html>
+
+

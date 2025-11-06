@@ -1,0 +1,11 @@
+fastapi==0.103.2
+uvicorn[standard]==0.22.0
+SQLAlchemy==2.0.36
+psycopg2-binary==2.9.9
+pydantic==2.5.3
+jinja2==3.1.4
+python-multipart==0.0.6
+
+# scheduler for periodic import
+APScheduler==3.10.4
+
