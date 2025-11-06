@@ -187,16 +187,45 @@ install_docker() {
         docker-common docker-latest docker-latest-logrotate \
         docker-logrotate docker-engine 2>/dev/null || true
 
-    # 安装必要的工具
-    yum install -y yum-utils device-mapper-persistent-data lvm2
+    # 安装必要的工具（先彻底处理可能存在的docker仓库，避免安装时出错）
+    log_info "准备安装必要工具..."
+    
+    # 先彻底处理可能存在的旧Docker仓库
+    if [[ -f /etc/yum.repos.d/docker-ce.repo ]]; then
+        log_info "发现旧的Docker仓库配置，正在处理..."
+        # 尝试禁用仓库（如果yum-utils已安装）
+        if command -v yum-config-manager &> /dev/null; then
+            yum-config-manager --disable docker-ce-stable 2>/dev/null || true
+            yum-config-manager --disable docker-ce-test 2>/dev/null || true
+            yum-config-manager --disable docker-ce-nightly 2>/dev/null || true
+        fi
+        # 备份并删除旧配置（彻底移除，避免yum自动启用）
+        local backup_name="docker-ce.repo.bak.$(date +%Y%m%d_%H%M%S)"
+        mv /etc/yum.repos.d/docker-ce.repo /etc/yum.repos.d/$backup_name 2>/dev/null || true
+        log_info "已备份旧配置到: $backup_name"
+    fi
+    
+    # 清理yum缓存（避免使用旧的仓库信息）
+    log_info "清理yum缓存..."
+    yum clean all > /dev/null 2>&1 || true
+    # 清理metadata缓存
+    rm -rf /var/cache/yum/*/docker-ce* 2>/dev/null || true
+    
+    # 安装必要的工具（使用--disablerepo确保不访问docker仓库）
+    log_info "安装必要工具: yum-utils, device-mapper-persistent-data, lvm2"
+    if ! yum install -y --disablerepo=docker-ce-stable --disablerepo=docker-ce-test --disablerepo=docker-ce-nightly \
+        yum-utils device-mapper-persistent-data lvm2 2>&1 | tee /tmp/yum_install_tools.log; then
+        log_warning "使用仓库过滤安装失败，尝试直接安装..."
+        # 如果禁用仓库后安装失败，尝试直接安装（可能仓库已经被删除）
+        yum install -y yum-utils device-mapper-persistent-data lvm2 || {
+            log_error "安装必要工具失败，请检查yum配置"
+            exit 1
+        }
+    fi
+    log_success "必要工具安装完成"
 
     # 添加Docker仓库（优先使用国内镜像源）
     log_info "配置Docker CE仓库..."
-    
-    # 移除可能存在的旧仓库配置
-    if [[ -f /etc/yum.repos.d/docker-ce.repo ]]; then
-        rm -f /etc/yum.repos.d/docker-ce.repo
-    fi
     
     # 定义镜像源配置（baseurl, gpgkey）
     local repo_added=false
@@ -225,8 +254,22 @@ install_docker() {
         local mirror_url=$(echo "$mirror_info" | cut -d: -f2)
         
         log_info "测试镜像源 [$mirror_name]: $mirror_url"
-        # 测试镜像源是否可达（检查repodata目录）
+        
+        # 测试镜像源是否可达（多种方式测试）
+        local mirror_available=false
+        
+        # 方法1: 尝试访问repodata（最可靠）
         if curl -sfL --connect-timeout 10 --max-time 30 "${mirror_url}/7/x86_64/stable/repodata/repomd.xml" > /dev/null 2>&1; then
+            mirror_available=true
+        # 方法2: 尝试访问repo文件（如果方法1失败）
+        elif curl -sfL --connect-timeout 10 --max-time 30 "${mirror_url}/docker-ce.repo" > /dev/null 2>&1; then
+            mirror_available=true
+        # 方法3: 尝试访问基础URL（最后手段）
+        elif curl -sfL --connect-timeout 10 --max-time 30 "${mirror_url}/" > /dev/null 2>&1; then
+            mirror_available=true
+        fi
+        
+        if [[ "$mirror_available" == "true" ]]; then
             mirror_base="$mirror_url"
             log_success "镜像源 [$mirror_name] 可用，将使用此源"
             break
@@ -265,12 +308,40 @@ EOF
         
     # 复制到系统目录
     cp /tmp/docker-ce.repo /etc/yum.repos.d/docker-ce.repo
-    log_success "Docker仓库配置已创建"
     
-    # 清理yum缓存并更新
-    log_info "更新yum仓库缓存..."
+    # 验证配置文件内容
+    log_info "验证仓库配置文件..."
+    if grep -q "baseurl.*$mirror_base" /etc/yum.repos.d/docker-ce.repo 2>/dev/null; then
+        log_success "Docker仓库配置已创建，使用镜像源: $mirror_base"
+        # 显示配置的关键信息
+        log_info "仓库配置内容:"
+        grep -E "\[docker-ce|baseurl|gpgkey" /etc/yum.repos.d/docker-ce.repo | head -3 | while read line; do
+            log_info "  $line"
+        done || true
+    else
+        log_error "仓库配置文件验证失败"
+        exit 1
+    fi
+    
+    # 清理yum缓存并更新（使用新的仓库配置）
+    log_info "清理yum缓存并使用新仓库配置..."
     yum clean all > /dev/null 2>&1 || true
-    yum makecache fast > /dev/null 2>&1 || yum makecache > /dev/null 2>&1 || true
+    # 清理expire-cache，确保使用新配置
+    yum clean expire-cache > /dev/null 2>&1 || true
+    
+    # 更新仓库缓存（如果失败，会在安装时重试）
+    log_info "更新yum仓库缓存..."
+    if ! yum makecache fast > /dev/null 2>&1; then
+        log_warning "快速缓存更新失败，尝试完整更新..."
+        if ! yum makecache > /tmp/yum_makecache.log 2>&1; then
+            log_warning "仓库缓存更新失败，但将尝试继续安装..."
+            log_info "缓存日志: $(tail -5 /tmp/yum_makecache.log 2>/dev/null || echo '无日志')"
+        else
+            log_success "仓库缓存更新成功"
+        fi
+    else
+        log_success "仓库缓存更新成功"
+    fi
 
     # 安装Docker（带重试机制）
     log_info "开始安装Docker CE..."
