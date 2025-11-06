@@ -250,23 +250,40 @@ install_docker() {
     )
     
     for mirror_info in "${mirror_names[@]}"; do
-        local mirror_name=$(echo "$mirror_info" | cut -d: -f1)
-        local mirror_url=$(echo "$mirror_info" | cut -d: -f2)
+        # 使用 sed 正确分割，因为 URL 中包含多个冒号
+        local mirror_name=$(echo "$mirror_info" | sed 's/:.*$//')
+        local mirror_url=$(echo "$mirror_info" | sed 's/^[^:]*://')
         
         log_info "测试镜像源 [$mirror_name]: $mirror_url"
         
         # 测试镜像源是否可达（多种方式测试）
         local mirror_available=false
+        local test_url=""
         
         # 方法1: 尝试访问repodata（最可靠）
-        if curl -sfL --connect-timeout 10 --max-time 30 "${mirror_url}/7/x86_64/stable/repodata/repomd.xml" > /dev/null 2>&1; then
+        test_url="${mirror_url}/7/x86_64/stable/repodata/repomd.xml"
+        if curl -sfL --connect-timeout 10 --max-time 30 "$test_url" > /dev/null 2>&1; then
             mirror_available=true
+            log_info "  测试通过: repodata/repomd.xml"
         # 方法2: 尝试访问repo文件（如果方法1失败）
-        elif curl -sfL --connect-timeout 10 --max-time 30 "${mirror_url}/docker-ce.repo" > /dev/null 2>&1; then
-            mirror_available=true
-        # 方法3: 尝试访问基础URL（最后手段）
-        elif curl -sfL --connect-timeout 10 --max-time 30 "${mirror_url}/" > /dev/null 2>&1; then
-            mirror_available=true
+        else
+            test_url="${mirror_url}/docker-ce.repo"
+            if curl -sfL --connect-timeout 10 --max-time 30 "$test_url" > /dev/null 2>&1; then
+                mirror_available=true
+                log_info "  测试通过: docker-ce.repo"
+            # 方法3: 尝试访问基础URL（最后手段）
+            else
+                test_url="${mirror_url}/"
+                if curl -sfL --connect-timeout 10 --max-time 30 "$test_url" > /dev/null 2>&1; then
+                    mirror_available=true
+                    log_info "  测试通过: 基础URL"
+                else
+                    # 显示详细错误信息
+                    local curl_error=$(curl -sfL --connect-timeout 10 --max-time 30 "$test_url" 2>&1 | head -1)
+                    log_warning "  测试失败: $test_url"
+                    log_warning "  错误信息: ${curl_error:-连接超时或无法访问}"
+                fi
+            fi
         fi
         
         if [[ "$mirror_available" == "true" ]]; then
@@ -279,8 +296,16 @@ install_docker() {
     done
     
     if [[ -z "$mirror_base" ]]; then
-        log_error "所有镜像源都不可用，请检查网络连接"
-        exit 1
+        # 如果所有镜像源测试都失败，但已经下载了官方配置文件，尝试使用官方配置
+        if [[ "$repo_added" == "true" ]] && [[ -f /tmp/docker-ce.repo ]]; then
+            log_warning "所有镜像源测试失败，但已下载官方配置文件"
+            log_info "将使用官方配置，安装时可能会重试"
+            mirror_base="https://download.docker.com/linux/centos"
+        else
+            log_error "所有镜像源都不可用，且无法获取配置文件"
+            log_info "请检查网络连接或手动配置 Docker 仓库"
+            exit 1
+        fi
     fi
     
     # 如果之前下载了官方文件，且需要使用国内镜像源，则修改baseurl
