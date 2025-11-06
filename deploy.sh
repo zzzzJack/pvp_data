@@ -212,44 +212,45 @@ install_docker() {
     
     # 方法2: 测试并选择可用的镜像源（优先国内源）
     # 无论是否下载成功，都测试并选择最佳镜像源
-    {
-        # 测试国内镜像源可用性（按优先级）
-        local mirror_base=""
-        local mirror_names=(
-            "aliyun:https://mirrors.aliyun.com/docker-ce/linux/centos"
-            "tsinghua:https://mirrors.tuna.tsinghua.edu.cn/docker-ce/linux/centos"
-            "official:https://download.docker.com/linux/centos"
-        )
+    # 测试国内镜像源可用性（按优先级）
+    local mirror_base=""
+    local mirror_names=(
+        "aliyun:https://mirrors.aliyun.com/docker-ce/linux/centos"
+        "tsinghua:https://mirrors.tuna.tsinghua.edu.cn/docker-ce/linux/centos"
+        "official:https://download.docker.com/linux/centos"
+    )
+    
+    for mirror_info in "${mirror_names[@]}"; do
+        local mirror_name=$(echo "$mirror_info" | cut -d: -f1)
+        local mirror_url=$(echo "$mirror_info" | cut -d: -f2)
         
-        for mirror_info in "${mirror_names[@]}"; do
-            local mirror_name=$(echo "$mirror_info" | cut -d: -f1)
-            local mirror_url=$(echo "$mirror_info" | cut -d: -f2)
-            
-            log_info "测试镜像源 [$mirror_name]: $mirror_url"
-            # 测试镜像源是否可达（检查repodata目录）
-            if curl -sfL --connect-timeout 10 --max-time 30 "${mirror_url}/7/x86_64/stable/repodata/repomd.xml" > /dev/null 2>&1; then
-                mirror_base="$mirror_url"
-                log_success "镜像源 [$mirror_name] 可用，将使用此源"
-                break
-            else
-                log_warning "镜像源 [$mirror_name] 不可用，尝试下一个..."
-            fi
-        done
-        
-        if [[ -z "$mirror_base" ]]; then
-            log_error "所有镜像源都不可用，请检查网络连接"
-            exit 1
+        log_info "测试镜像源 [$mirror_name]: $mirror_url"
+        # 测试镜像源是否可达（检查repodata目录）
+        if curl -sfL --connect-timeout 10 --max-time 30 "${mirror_url}/7/x86_64/stable/repodata/repomd.xml" > /dev/null 2>&1; then
+            mirror_base="$mirror_url"
+            log_success "镜像源 [$mirror_name] 可用，将使用此源"
+            break
+        else
+            log_warning "镜像源 [$mirror_name] 不可用，尝试下一个..."
         fi
-        
-        # 如果之前下载了官方文件，修改baseurl；否则直接创建
-        if [[ "$repo_added" == "true" ]] && [[ "$mirror_base" != "https://download.docker.com/linux/centos" ]]; then
-            log_info "将仓库配置修改为使用国内镜像源..."
-            sed -i "s|baseurl=https://download.docker.com|baseurl=$mirror_base|g" /tmp/docker-ce.repo
-            sed -i "s|gpgkey=https://download.docker.com|gpgkey=$mirror_base|g" /tmp/docker-ce.repo 2>/dev/null || true
-        elif [[ "$repo_added" == "false" ]]; then
-            # 直接创建仓库配置文件
-            log_info "创建Docker仓库配置文件..."
-            cat > /tmp/docker-ce.repo << 'EOF'
+    done
+    
+    if [[ -z "$mirror_base" ]]; then
+        log_error "所有镜像源都不可用，请检查网络连接"
+        exit 1
+    fi
+    
+    # 如果之前下载了官方文件，且需要使用国内镜像源，则修改baseurl
+    if [[ "$repo_added" == "true" ]] && [[ "$mirror_base" != "https://download.docker.com/linux/centos" ]]; then
+        log_info "将仓库配置修改为使用国内镜像源..."
+        sed -i "s|baseurl=https://download.docker.com|baseurl=$mirror_base|g" /tmp/docker-ce.repo
+        sed -i "s|gpgkey=https://download.docker.com|gpgkey=$mirror_base|g" /tmp/docker-ce.repo 2>/dev/null || true
+    elif [[ "$repo_added" == "true" ]] && [[ "$mirror_base" == "https://download.docker.com/linux/centos" ]]; then
+        log_info "使用官方仓库配置，无需修改"
+    else
+        # 直接创建仓库配置文件
+        log_info "创建Docker仓库配置文件..."
+        cat > /tmp/docker-ce.repo << 'EOF'
 [docker-ce-stable]
 name=Docker CE Stable - $basearch
 baseurl=REPLACE_BASEURL/7/$basearch/stable
@@ -257,15 +258,14 @@ enabled=1
 gpgcheck=1
 gpgkey=REPLACE_GPGKEY/linux/centos/gpg
 EOF
-            sed -i "s|REPLACE_BASEURL|$mirror_base|g" /tmp/docker-ce.repo
-            sed -i "s|REPLACE_GPGKEY|$mirror_base|g" /tmp/docker-ce.repo
-            repo_added=true
-        fi
+        sed -i "s|REPLACE_BASEURL|$mirror_base|g" /tmp/docker-ce.repo
+        sed -i "s|REPLACE_GPGKEY|$mirror_base|g" /tmp/docker-ce.repo
+        repo_added=true
+    fi
         
-        # 复制到系统目录
-        cp /tmp/docker-ce.repo /etc/yum.repos.d/docker-ce.repo
-        log_success "Docker仓库配置已创建"
-    }
+    # 复制到系统目录
+    cp /tmp/docker-ce.repo /etc/yum.repos.d/docker-ce.repo
+    log_success "Docker仓库配置已创建"
     
     # 清理yum缓存并更新
     log_info "更新yum仓库缓存..."
