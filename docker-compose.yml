@@ -22,6 +22,8 @@ services:
       retries: 5
 
   app:
+    # 如果镜像已构建，使用image；否则使用build
+    image: pvp_data-app:latest
     build:
       context: .
       dockerfile: Dockerfile

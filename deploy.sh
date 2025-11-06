@@ -295,6 +295,35 @@ stop_old_containers() {
     log_success "旧容器已停止"
 }
 
+# 预拉取基础镜像
+pre_pull_images() {
+    log_info "预拉取基础镜像..."
+    
+    # 拉取Python基础镜像
+    if ! docker images | grep -q "python.*3.11-slim"; then
+        log_info "拉取 python:3.11-slim 镜像..."
+        if docker pull python:3.11-slim; then
+            log_success "Python基础镜像拉取成功"
+        else
+            log_warning "Python基础镜像拉取失败，构建时会自动尝试"
+        fi
+    else
+        log_info "Python基础镜像已存在，跳过拉取"
+    fi
+    
+    # 拉取PostgreSQL镜像
+    if ! docker images | grep -q "postgres.*15"; then
+        log_info "拉取 postgres:15 镜像..."
+        if docker pull postgres:15; then
+            log_success "PostgreSQL镜像拉取成功"
+        else
+            log_warning "PostgreSQL镜像拉取失败，构建时会自动尝试"
+        fi
+    else
+        log_info "PostgreSQL镜像已存在，跳过拉取"
+    fi
+}
+
 # 构建和启动服务
 deploy_services() {
     log_info "开始构建和启动服务..."
@@ -305,10 +334,21 @@ deploy_services() {
         systemctl status docker --no-pager > /dev/null 2>&1 || true
     fi
     
+    # 预拉取基础镜像
+    pre_pull_images
+    
     # 构建镜像
     log_info "构建Docker镜像..."
-    log_info "提示: 如果构建时DNS仍然失败，请手动重启Docker: systemctl restart docker"
-    docker-compose build --no-cache
+    log_info "提示: 使用host网络模式构建，可以直接使用宿主机DNS配置"
+    
+    # 方法1: 使用docker build with --network=host（推荐，直接使用宿主机DNS）
+    if docker build --network=host -t pvp_data-app:latest -f Dockerfile .; then
+        log_success "Docker镜像构建成功"
+    else
+        log_warning "使用host网络构建失败，尝试使用docker-compose构建..."
+        # 方法2: 使用docker-compose（会使用daemon.json中的DNS配置）
+        docker-compose build --no-cache
+    fi
     
     # 启动服务
     log_info "启动服务..."
