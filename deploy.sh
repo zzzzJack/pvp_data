@@ -79,52 +79,77 @@ check_and_config_dns() {
         fi
         
         # 配置Docker daemon DNS
-        if [[ ! -f /etc/docker/daemon.json ]] || ! grep -q "dns" /etc/docker/daemon.json 2>/dev/null; then
-            log_info "配置Docker daemon DNS..."
-            mkdir -p /etc/docker
-            
-            if [[ -f /etc/docker/daemon.json ]]; then
-                # 使用jq或python来更新JSON（如果可用）
-                if command -v python3 &> /dev/null; then
-                    python3 << 'EOF'
+        log_info "配置Docker daemon DNS..."
+        mkdir -p /etc/docker
+        
+        # 检查是否需要添加DNS配置
+        local need_dns_config=false
+        if [[ ! -f /etc/docker/daemon.json ]]; then
+            need_dns_config=true
+        elif ! grep -q '"dns"' /etc/docker/daemon.json 2>/dev/null; then
+            need_dns_config=true
+        fi
+        
+        if [[ "$need_dns_config" == "true" ]]; then
+            if command -v python3 &> /dev/null; then
+                python3 << 'EOF'
 import json
 import sys
 
 try:
     with open('/etc/docker/daemon.json', 'r') as f:
         config = json.load(f)
-except:
+except Exception as e:
     config = {}
 
+# 添加DNS配置
 if 'dns' not in config:
     config['dns'] = ['8.8.8.8', '114.114.114.114', '223.5.5.5']
 else:
     dns_list = config['dns'] if isinstance(config['dns'], list) else [config['dns']]
-    for dns in ['8.8.8.8', '114.114.114.114', '223.5.5.5']:
+    required_dns = ['8.8.8.8', '114.114.114.114', '223.5.5.5']
+    for dns in required_dns:
         if dns not in dns_list:
             dns_list.append(dns)
     config['dns'] = dns_list
 
+# 备份原配置
+try:
+    import shutil
+    shutil.copy('/etc/docker/daemon.json', '/etc/docker/daemon.json.bak')
+except:
+    pass
+
+# 写入新配置
 with open('/etc/docker/daemon.json', 'w') as f:
-    json.dump(config, f, indent=2)
+    json.dump(config, f, indent=2, ensure_ascii=False)
+
+print("DNS配置已添加")
 EOF
+                if [[ $? -eq 0 ]]; then
                     systemctl restart docker 2>/dev/null || true
-                    sleep 3  # 等待Docker服务重启完成
+                    sleep 5  # 等待Docker服务重启完成
                     log_success "Docker daemon DNS配置已更新，服务已重启"
+                    
+                    # 验证Docker是否正常运行
+                    local docker_retries=0
+                    while [[ $docker_retries -lt 10 ]]; do
+                        if docker info > /dev/null 2>&1; then
+                            log_success "Docker服务运行正常"
+                            break
+                        fi
+                        docker_retries=$((docker_retries + 1))
+                        sleep 1
+                    done
                 else
-                    log_warning "无法自动配置Docker daemon DNS，请手动配置 /etc/docker/daemon.json"
+                    log_error "更新Docker daemon配置失败"
                 fi
             else
-                # 创建新的daemon.json
-                cat > /etc/docker/daemon.json << 'EOF'
-{
-  "dns": ["8.8.8.8", "114.114.114.114", "223.5.5.5"]
-}
-EOF
-                systemctl restart docker 2>/dev/null || true
-                sleep 3  # 等待Docker服务重启完成
-                log_success "Docker daemon DNS配置已创建，服务已重启"
+                log_warning "需要python3来更新Docker配置，请手动添加DNS到 /etc/docker/daemon.json"
+                log_info "请在 /etc/docker/daemon.json 中添加: \"dns\": [\"8.8.8.8\", \"114.114.114.114\", \"223.5.5.5\"]"
             fi
+        else
+            log_info "Docker daemon DNS配置已存在，跳过配置"
         fi
         
         # 再次测试
