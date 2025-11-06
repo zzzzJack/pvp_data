@@ -292,30 +292,30 @@ configure_postgresql() {
     # 创建数据库和用户
     log_info "创建数据库和用户..."
     
-    # 使用postgres用户执行SQL
-    sudo -u postgres psql << EOF 2>/dev/null || {
-        log_warning "使用postgres用户执行失败，尝试直接连接..."
-        PGPASSWORD=postgres psql -U postgres -h localhost << EOF2
-EOF
-    }
-    
-    # 尝试创建用户和数据库
-    sudo -u postgres psql -c "SELECT 1 FROM pg_user WHERE usename='app';" | grep -q 1 || {
+    # 检查用户是否存在
+    if sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='app';" 2>/dev/null | grep -q 1; then
+        log_info "数据库用户 'app' 已存在"
+    else
         log_info "创建数据库用户: app"
-        sudo -u postgres psql -c "CREATE USER app WITH PASSWORD 'app';" || {
-            log_warning "创建用户失败，可能已存在"
+        sudo -u postgres psql -c "CREATE USER app WITH PASSWORD 'app';" 2>/dev/null || {
+            log_warning "创建用户失败，可能已存在或权限不足"
         }
-    }
+    fi
     
-    sudo -u postgres psql -c "SELECT 1 FROM pg_database WHERE datname='pvp';" | grep -q 1 || {
+    # 检查数据库是否存在
+    if sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='pvp';" 2>/dev/null | grep -q 1; then
+        log_info "数据库 'pvp' 已存在"
+    else
         log_info "创建数据库: pvp"
-        sudo -u postgres psql -c "CREATE DATABASE pvp OWNER app;" || {
-            log_warning "创建数据库失败，可能已存在"
+        sudo -u postgres psql -c "CREATE DATABASE pvp OWNER app;" 2>/dev/null || {
+            log_warning "创建数据库失败，可能已存在或权限不足"
         }
-    }
+    fi
     
     # 授予权限
-    sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE pvp TO app;" || true
+    log_info "授予数据库权限..."
+    sudo -u postgres psql -d pvp -c "GRANT ALL PRIVILEGES ON DATABASE pvp TO app;" 2>/dev/null || true
+    sudo -u postgres psql -d pvp -c "GRANT ALL ON SCHEMA public TO app;" 2>/dev/null || true
     
     log_success "PostgreSQL配置完成"
 }
