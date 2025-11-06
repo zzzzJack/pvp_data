@@ -5,7 +5,7 @@ FROM python:3.11-slim
 WORKDIR /app
 
 # 配置APT使用国内镜像源（阿里云）
-# 处理不同版本的Debian源配置
+# 处理不同版本的Debian源配置，优先使用阿里云，失败则使用清华镜像
 RUN if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
         sed -i 's|http://deb.debian.org|http://mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources && \
         sed -i 's|https://deb.debian.org|http://mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources; \
@@ -19,12 +19,16 @@ RUN if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
         echo "deb http://mirrors.aliyun.com/debian/ bookworm-updates main" >> /etc/apt/sources.list; \
     fi
 
-# 安装系统依赖
-RUN apt-get update && apt-get install -y \
-    gcc \
-    postgresql-client \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
+# 安装系统依赖（只安装gcc，psycopg2-binary已包含预编译版本）
+# 使用重试机制，如果阿里云镜像失败，尝试清华镜像
+RUN apt-get update || ( \
+        echo "deb http://mirrors.tuna.tsinghua.edu.cn/debian/ bookworm main" > /etc/apt/sources.list && \
+        echo "deb http://mirrors.tuna.tsinghua.edu.cn/debian-security/ bookworm-security main" >> /etc/apt/sources.list && \
+        echo "deb http://mirrors.tuna.tsinghua.edu.cn/debian/ bookworm-updates main" >> /etc/apt/sources.list && \
+        apt-get update \
+    ) && \
+    apt-get install -y gcc && \
+    rm -rf /var/lib/apt/lists/*
 
 # 复制requirements.txt并安装Python依赖
 COPY requirements.txt .
