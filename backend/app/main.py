@@ -19,8 +19,13 @@ from backend.app.auto_importer import run_import_once
 
 app = FastAPI(default_response_class=JSONResponse)
 
-# 创建表（简单演示场景）
-Base.metadata.create_all(bind=engine)
+# 创建表（延迟创建，避免启动时连接失败）
+def _ensure_tables():
+    try:
+        Base.metadata.create_all(bind=engine)
+    except Exception as e:
+        print(f"Warning: Failed to create tables on startup: {e}")
+        print("Tables will be created on first database access")
 
 templates = Jinja2Templates(directory="backend/app/templates")
 _scheduler: BackgroundScheduler | None = None
@@ -28,6 +33,9 @@ _scheduler: BackgroundScheduler | None = None
 @app.on_event("startup")
 def _start_scheduler():
     global _scheduler
+    # 确保数据库表已创建
+    _ensure_tables()
+    
     try:
         interval = int(os.environ.get('IMPORT_INTERVAL_SEC', '300'))
     except Exception:
@@ -53,7 +61,19 @@ def index(request: Request):
 
 @app.get("/api/health")
 def health():
+    """健康检查端点，不依赖数据库"""
     return {"status": "ok"}
+
+@app.get("/api/health/db")
+def health_db(db: Session = Depends(get_db)):
+    """数据库健康检查端点"""
+    try:
+        # 简单查询测试连接
+        from sqlalchemy import text
+        db.execute(text("SELECT 1"))
+        return {"status": "ok", "database": "connected"}
+    except Exception as e:
+        return {"status": "error", "database": "disconnected", "error": str(e)}, 503
 
 
 @app.post("/api/admin/import_once")
