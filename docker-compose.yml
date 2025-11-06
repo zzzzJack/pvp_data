@@ -2,6 +2,10 @@ version: "3.9"
 services:
   postgres:
     image: postgres:15
+    dns:
+      - 8.8.8.8
+      - 114.114.114.114
+      - 223.5.5.5
     restart: unless-stopped
     environment:
       POSTGRES_USER: app
@@ -21,6 +25,12 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        BUILDKIT_INLINE_CACHE: 1
+    dns:
+      - 8.8.8.8
+      - 114.114.114.114
+      - 223.5.5.5
     restart: unless-stopped
     ports:
       - "8090:8090"
