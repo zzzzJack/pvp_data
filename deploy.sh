@@ -190,11 +190,86 @@ install_docker() {
     # 安装必要的工具
     yum install -y yum-utils device-mapper-persistent-data lvm2
 
-    # 添加Docker仓库
-    yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+    # 添加Docker仓库（优先使用国内镜像源）
+    log_info "配置Docker CE仓库..."
+    
+    # 移除可能存在的旧仓库配置
+    if [[ -f /etc/yum.repos.d/docker-ce.repo ]]; then
+        rm -f /etc/yum.repos.d/docker-ce.repo
+    fi
+    
+    # 尝试使用国内镜像源（按优先级排序）
+    local docker_repo_added=false
+    local repo_sources=(
+        "aliyun:https://mirrors.aliyun.com/docker-ce/linux/centos"
+        "tsinghua:https://mirrors.tuna.tsinghua.edu.cn/docker-ce/linux/centos"
+        "official:https://download.docker.com/linux/centos"
+    )
+    
+    for repo_source in "${repo_sources[@]}"; do
+        local repo_name=$(echo "$repo_source" | cut -d: -f1)
+        local repo_base=$(echo "$repo_source" | cut -d: -f2)
+        local repo_url="${repo_base}/docker-ce.repo"
+        
+        log_info "尝试使用仓库 [$repo_name]: $repo_url"
+        
+        # 测试仓库URL是否可访问
+        if curl -sfL --connect-timeout 10 --max-time 30 "$repo_url" -o /tmp/docker-ce.repo 2>/dev/null; then
+            # 如果是国内镜像源，需要修改baseurl指向镜像源
+            if [[ "$repo_name" == "aliyun" ]]; then
+                sed -i "s|baseurl=https://download.docker.com|baseurl=https://mirrors.aliyun.com/docker-ce|g" /tmp/docker-ce.repo
+                sed -i "s|gpgkey=https://download.docker.com|gpgkey=https://mirrors.aliyun.com/docker-ce|g" /tmp/docker-ce.repo 2>/dev/null || true
+            elif [[ "$repo_name" == "tsinghua" ]]; then
+                sed -i "s|baseurl=https://download.docker.com|baseurl=https://mirrors.tuna.tsinghua.edu.cn/docker-ce|g" /tmp/docker-ce.repo
+                sed -i "s|gpgkey=https://download.docker.com|gpgkey=https://mirrors.tuna.tsinghua.edu.cn/docker-ce|g" /tmp/docker-ce.repo 2>/dev/null || true
+            fi
+            
+            cp /tmp/docker-ce.repo /etc/yum.repos.d/docker-ce.repo
+            docker_repo_added=true
+            log_success "成功添加Docker仓库 [$repo_name]"
+            break
+        else
+            log_warning "仓库 [$repo_name] 添加失败，尝试下一个..."
+            sleep 2  # 等待2秒后尝试下一个
+        fi
+    done
+    
+    if [[ "$docker_repo_added" == "false" ]]; then
+        log_error "所有Docker仓库源都添加失败，请检查网络连接"
+        log_info "您可以手动创建仓库文件，编辑 /etc/yum.repos.d/docker-ce.repo"
+        log_info "或运行以下命令手动下载："
+        log_info "  curl -o /etc/yum.repos.d/docker-ce.repo https://mirrors.aliyun.com/docker-ce/linux/centos/docker-ce.repo"
+        exit 1
+    fi
+    
+    # 清理yum缓存并更新
+    log_info "更新yum仓库缓存..."
+    yum clean all > /dev/null 2>&1 || true
+    yum makecache fast > /dev/null 2>&1 || yum makecache > /dev/null 2>&1 || true
 
-    # 安装Docker
-    yum install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+    # 安装Docker（带重试机制）
+    log_info "开始安装Docker CE..."
+    local install_retries=0
+    local max_install_retries=3
+    
+    while [[ $install_retries -lt $max_install_retries ]]; do
+        if yum install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin 2>&1 | tee /tmp/docker_install.log; then
+            log_success "Docker安装成功"
+            break
+        else
+            install_retries=$((install_retries + 1))
+            if [[ $install_retries -lt $max_install_retries ]]; then
+                log_warning "Docker安装失败，第 $install_retries/$max_install_retries 次重试..."
+                sleep 5
+                # 清理缓存后重试
+                yum clean all > /dev/null 2>&1 || true
+            else
+                log_error "Docker安装失败，已尝试 $max_install_retries 次"
+                log_info "安装日志已保存到 /tmp/docker_install.log"
+                exit 1
+            fi
+        fi
+    done
 
     # 启动Docker服务
     systemctl start docker
@@ -356,7 +431,7 @@ deploy_services() {
     
     # 等待服务就绪
     log_info "等待服务启动..."
-    sleep 10
+    sleep 15  # 增加初始等待时间，确保数据库和服务都启动完成
     
     # 检查服务状态
     local max_retries=30
@@ -364,9 +439,15 @@ deploy_services() {
     
     while [[ $retry_count -lt $max_retries ]]; do
         if docker-compose ps | grep -q "Up"; then
+            # 先测试健康检查端点（不依赖数据库）
             if curl -sf http://localhost:8090/api/health > /dev/null 2>&1; then
-                log_success "服务启动成功！"
-                return 0
+                # 再测试数据库连接端点
+                if curl -sf http://localhost:8090/api/health/db > /dev/null 2>&1; then
+                    log_success "服务启动成功！应用和数据库连接正常！"
+                    return 0
+                else
+                    log_info "应用已启动，但数据库连接可能还在初始化... ($retry_count/$max_retries)"
+                fi
             fi
         fi
         retry_count=$((retry_count + 1))
@@ -374,7 +455,14 @@ deploy_services() {
         log_info "等待服务就绪... ($retry_count/$max_retries)"
     done
     
-    log_warning "服务可能未完全启动，请检查日志"
+    # 如果超时，但仍然显示Up，说明服务可能已经启动但健康检查失败
+    if docker-compose ps | grep -q "Up"; then
+        log_warning "服务容器已启动，但健康检查未通过"
+        log_info "请检查日志: docker-compose logs app"
+        log_info "或手动测试: curl http://localhost:8090/api/health"
+    else
+        log_warning "服务可能未完全启动，请检查日志"
+    fi
     return 1
 }
 
@@ -389,6 +477,7 @@ show_status() {
     log_success "应用访问地址: http://$(hostname -I | awk '{print $1}'):8090"
     log_success "本地访问地址: http://localhost:8090"
     log_success "健康检查: http://localhost:8090/api/health"
+    log_success "数据库健康检查: http://localhost:8090/api/health/db"
     echo ""
     
     log_info "==================== 常用命令 ===================="

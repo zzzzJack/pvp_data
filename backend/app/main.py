@@ -33,17 +33,23 @@ _scheduler: BackgroundScheduler | None = None
 @app.on_event("startup")
 def _start_scheduler():
     global _scheduler
-    # 确保数据库表已创建
-    _ensure_tables()
-    
     try:
-        interval = int(os.environ.get('IMPORT_INTERVAL_SEC', '300'))
-    except Exception:
-        interval = 300
-    logs_dir = os.environ.get('IMPORT_DIR', 'data_logs')
-    _scheduler = BackgroundScheduler()
-    _scheduler.add_job(lambda: run_import_once(logs_dir), 'interval', seconds=interval, id='auto_import', max_instances=1, coalesce=True)
-    _scheduler.start()
+        # 确保数据库表已创建
+        _ensure_tables()
+        
+        try:
+            interval = int(os.environ.get('IMPORT_INTERVAL_SEC', '300'))
+        except Exception:
+            interval = 300
+        logs_dir = os.environ.get('IMPORT_DIR', 'data_logs')
+        _scheduler = BackgroundScheduler()
+        _scheduler.add_job(lambda: run_import_once(logs_dir), 'interval', seconds=interval, id='auto_import', max_instances=1, coalesce=True)
+        _scheduler.start()
+        print(f"Scheduler started with interval {interval}s, logs_dir={logs_dir}")
+    except Exception as e:
+        print(f"Warning: Failed to start scheduler: {e}")
+        print("Application will continue without auto-import")
+        _scheduler = None
 
 @app.on_event("shutdown")
 def _stop_scheduler():
