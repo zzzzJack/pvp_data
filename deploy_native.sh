@@ -326,18 +326,45 @@ setup_python_venv() {
     
     local project_dir=$(pwd)
     
-    if [[ -d "${project_dir}/.venv" ]]; then
-        log_info "虚拟环境已存在，跳过创建"
+    # 检查虚拟环境是否完整（不仅检查目录，还要检查 activate 文件）
+    if [[ -d "${project_dir}/.venv" ]] && [[ -f "${project_dir}/.venv/bin/activate" ]]; then
+        log_info "虚拟环境已存在且完整，跳过创建"
     else
+        if [[ -d "${project_dir}/.venv" ]]; then
+            log_warning "检测到不完整的虚拟环境目录，将重新创建..."
+            rm -rf "${project_dir}/.venv"
+        fi
+        
         log_info "创建虚拟环境..."
         python3 -m venv .venv || {
             log_error "虚拟环境创建失败"
             exit 1
         }
+        
+        # 再次验证虚拟环境是否创建成功
+        if [[ ! -f "${project_dir}/.venv/bin/activate" ]]; then
+            log_error "虚拟环境创建失败：activate 文件不存在"
+            exit 1
+        fi
     fi
     
     log_info "激活虚拟环境并安装依赖..."
-    source .venv/bin/activate
+    
+    # 检查 activate 文件是否存在
+    if [[ ! -f ".venv/bin/activate" ]]; then
+        log_error "虚拟环境激活文件不存在: .venv/bin/activate"
+        log_info "尝试重新创建虚拟环境..."
+        rm -rf .venv
+        python3 -m venv .venv || {
+            log_error "重新创建虚拟环境失败"
+            exit 1
+        }
+    fi
+    
+    source .venv/bin/activate || {
+        log_error "激活虚拟环境失败"
+        exit 1
+    }
     
     # 升级pip
     pip install --upgrade pip -i https://pypi.tuna.tsinghua.edu.cn/simple || {
