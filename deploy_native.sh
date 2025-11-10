@@ -326,16 +326,63 @@ setup_python_venv() {
     
     local project_dir=$(pwd)
     
-    # 检查虚拟环境是否完整（不仅检查目录，还要检查 activate 文件）
-    if [[ -d "${project_dir}/.venv" ]] && [[ -f "${project_dir}/.venv/bin/activate" ]]; then
-        log_info "虚拟环境已存在且完整，跳过创建"
+    # 首先检查系统 Python 版本，确保 >= 3.7
+    log_info "检查系统 Python 版本..."
+    if ! command -v python3 &> /dev/null; then
+        log_error "未找到 python3 命令"
+        exit 1
+    fi
+    
+    local sys_python_version=$(python3 --version 2>&1 | grep -oE '[0-9]+\.[0-9]+' | head -1)
+    local sys_python_major=$(echo "$sys_python_version" | cut -d. -f1)
+    local sys_python_minor=$(echo "$sys_python_version" | cut -d. -f2)
+    
+    if [[ "$sys_python_major" -lt 3 ]] || [[ "$sys_python_major" -eq 3 && "$sys_python_minor" -lt 7 ]]; then
+        log_error "系统 Python 版本过低: $sys_python_version，fastapi 0.103.2 需要 Python 3.7+"
+        log_info "请先升级 Python 版本"
+        exit 1
     else
+        log_success "系统 Python 版本符合要求: $sys_python_version"
+    fi
+    
+    # 检查虚拟环境是否存在且版本正确
+    local need_recreate=false
+    
+    if [[ -d "${project_dir}/.venv" ]] && [[ -f "${project_dir}/.venv/bin/activate" ]]; then
+        log_info "虚拟环境已存在，检查 Python 版本..."
+        
+        # 直接检查虚拟环境中的 Python 可执行文件版本
+        if [[ -f "${project_dir}/.venv/bin/python" ]]; then
+            local venv_python_version=$("${project_dir}/.venv/bin/python" --version 2>&1 | grep -oE '[0-9]+\.[0-9]+' | head -1)
+            local venv_python_major=$(echo "$venv_python_version" | cut -d. -f1)
+            local venv_python_minor=$(echo "$venv_python_version" | cut -d. -f2)
+            
+            log_info "虚拟环境 Python 版本: $venv_python_version"
+            
+            if [[ "$venv_python_major" -lt 3 ]] || [[ "$venv_python_major" -eq 3 && "$venv_python_minor" -lt 7 ]]; then
+                log_warning "虚拟环境 Python 版本过低 ($venv_python_version)，需要 >= 3.7"
+                log_info "将删除旧虚拟环境并重新创建..."
+                need_recreate=true
+            else
+                log_success "虚拟环境 Python 版本符合要求: $venv_python_version"
+            fi
+        else
+            log_warning "虚拟环境中找不到 Python 可执行文件，将重新创建..."
+            need_recreate=true
+        fi
+    else
+        log_info "虚拟环境不存在，将创建新的虚拟环境"
+        need_recreate=true
+    fi
+    
+    # 如果需要重新创建，删除旧环境
+    if [[ "$need_recreate" == "true" ]]; then
         if [[ -d "${project_dir}/.venv" ]]; then
-            log_warning "检测到不完整的虚拟环境目录，将重新创建..."
+            log_info "删除旧的虚拟环境..."
             rm -rf "${project_dir}/.venv"
         fi
         
-        log_info "创建虚拟环境..."
+        log_info "使用 Python $sys_python_version 创建虚拟环境..."
         python3 -m venv .venv || {
             log_error "虚拟环境创建失败"
             exit 1
@@ -346,6 +393,8 @@ setup_python_venv() {
             log_error "虚拟环境创建失败：activate 文件不存在"
             exit 1
         fi
+    else
+        log_info "虚拟环境已存在且版本正确，跳过创建"
     fi
     
     log_info "激活虚拟环境并安装依赖..."
@@ -366,16 +415,27 @@ setup_python_venv() {
         exit 1
     }
     
-    # 检查 Python 版本（fastapi 0.103.2 需要 Python 3.7+）
-    log_info "检查 Python 版本..."
-    # 虚拟环境激活后，使用 python 命令
+    # 再次确认虚拟环境中的 Python 版本
+    log_info "验证虚拟环境 Python 版本..."
     local python_version=$(python --version 2>&1 | grep -oE '[0-9]+\.[0-9]+' | head -1)
     local python_major=$(echo "$python_version" | cut -d. -f1)
     local python_minor=$(echo "$python_version" | cut -d. -f2)
     
     if [[ "$python_major" -lt 3 ]] || [[ "$python_major" -eq 3 && "$python_minor" -lt 7 ]]; then
-        log_error "Python 版本过低: $python_version，fastapi 0.103.2 需要 Python 3.7+"
-        exit 1
+        log_error "虚拟环境 Python 版本过低: $python_version，fastapi 0.103.2 需要 Python 3.7+"
+        log_info "尝试删除并重新创建虚拟环境..."
+        deactivate 2>/dev/null || true
+        rm -rf .venv
+        python3 -m venv .venv || {
+            log_error "重新创建虚拟环境失败"
+            exit 1
+        }
+        source .venv/bin/activate || {
+            log_error "激活虚拟环境失败"
+            exit 1
+        }
+        python_version=$(python --version 2>&1 | grep -oE '[0-9]+\.[0-9]+' | head -1)
+        log_success "重新创建后的 Python 版本: $python_version"
     else
         log_success "Python 版本符合要求: $python_version"
     fi
