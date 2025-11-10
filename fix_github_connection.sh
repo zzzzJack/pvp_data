@@ -239,6 +239,112 @@ setup_git_proxy() {
     return 1
 }
 
+# 方案5: 修复 git pull 卡住问题
+fix_git_pull_hanging() {
+    log_info "==================== 方案5: 修复 git pull 卡住问题 ===================="
+    
+    # 1. 检查当前 Git 配置
+    log_info "1. 检查当前 Git 配置..."
+    local has_proxy=false
+    local proxy_config=""
+    
+    if git config --global --get http.proxy > /dev/null 2>&1; then
+        proxy_config=$(git config --global --get http.proxy)
+        log_warning "检测到 Git HTTP 代理配置: $proxy_config"
+        has_proxy=true
+    fi
+    
+    if git config --global --get https.proxy > /dev/null 2>&1; then
+        proxy_config=$(git config --global --get https.proxy)
+        log_warning "检测到 Git HTTPS 代理配置: $proxy_config"
+        has_proxy=true
+    fi
+    
+    # 2. 测试代理是否可用（如果配置了）
+    if [[ "$has_proxy" == "true" ]]; then
+        log_info "2. 测试代理连接..."
+        if [[ -n "$proxy_config" ]]; then
+            local proxy_host=$(echo "$proxy_config" | sed -E 's|https?://([^:/]+).*|\1|')
+            local proxy_port=$(echo "$proxy_config" | sed -E 's|.*:([0-9]+).*|\1|')
+            
+            if timeout 5 bash -c "echo > /dev/tcp/$proxy_host/${proxy_port:-8080}" 2>/dev/null; then
+                log_success "代理服务器可达"
+            else
+                log_warning "代理服务器不可达，将清除代理配置"
+                git config --global --unset http.proxy 2>/dev/null || true
+                git config --global --unset https.proxy 2>/dev/null || true
+                log_success "已清除无效的代理配置"
+            fi
+        fi
+    fi
+    
+    # 3. 配置 Git 超时和缓冲区设置
+    log_info "3. 配置 Git 超时和缓冲区设置..."
+    
+    # 设置 HTTP 超时（30秒）
+    git config --global http.lowSpeedLimit 1000
+    git config --global http.lowSpeedTime 30
+    git config --global http.postBuffer 524288000  # 500MB
+    
+    # 设置连接超时
+    git config --global http.sslVerify true
+    git config --global http.version HTTP/1.1
+    
+    log_success "Git 超时和缓冲区配置完成"
+    log_info "   - 低速限制: 1000 bytes/s"
+    log_info "   - 超时时间: 30秒"
+    log_info "   - 缓冲区: 500MB"
+    
+    # 4. 测试 git pull（带超时）
+    log_info "4. 测试 git pull 连接..."
+    
+    # 检查是否在 git 仓库中
+    if ! git rev-parse --git-dir > /dev/null 2>&1; then
+        log_warning "当前目录不是 Git 仓库，跳过 pull 测试"
+        return 0
+    fi
+    
+    # 获取远程仓库 URL
+    local remote_url=$(git config --get remote.origin.url 2>/dev/null || echo "")
+    if [[ -z "$remote_url" ]]; then
+        log_warning "未找到远程仓库配置，跳过 pull 测试"
+        return 0
+    fi
+    
+    log_info "远程仓库: $remote_url"
+    
+    # 使用 timeout 命令测试 git fetch（模拟 pull）
+    log_info "执行测试连接（超时 60 秒）..."
+    if timeout 60 git fetch --dry-run origin 2>&1 | head -20; then
+        log_success "Git 连接测试成功！"
+        log_info ""
+        log_info "现在可以尝试执行: git pull"
+        return 0
+    else
+        local exit_code=$?
+        if [[ $exit_code -eq 124 ]]; then
+            log_error "Git 连接超时（60秒），可能网络较慢或连接有问题"
+        else
+            log_warning "Git 连接测试失败，但配置已优化"
+        fi
+        
+        # 提供详细诊断建议
+        log_info ""
+        log_info "==================== 诊断建议 ===================="
+        log_info "1. 尝试使用详细模式查看具体错误:"
+        log_info "   GIT_CURL_VERBOSE=1 GIT_TRACE=1 git pull"
+        log_info ""
+        log_info "2. 尝试使用 SSH 方式（如果已配置 SSH key）:"
+        log_info "   git remote set-url origin git@github.com:zzzzJack/pvp_data.git"
+        log_info "   git pull"
+        log_info ""
+        log_info "3. 检查防火墙和网络设置"
+        log_info ""
+        
+        return 1
+    fi
+}
+
 # 主函数
 main() {
     echo ""
@@ -275,6 +381,13 @@ main() {
     
     if setup_git_proxy; then
         log_success "问题已解决！"
+        exit 0
+    fi
+    
+    # 修复 git pull 卡住问题
+    if fix_git_pull_hanging; then
+        log_success "Git pull 配置已优化！"
+        log_info "请尝试执行: git pull"
         exit 0
     fi
     
