@@ -366,9 +366,23 @@ setup_python_venv() {
         exit 1
     }
     
+    # 检查 Python 版本（fastapi 0.103.2 需要 Python 3.7+）
+    log_info "检查 Python 版本..."
+    # 虚拟环境激活后，使用 python 命令
+    local python_version=$(python --version 2>&1 | grep -oE '[0-9]+\.[0-9]+' | head -1)
+    local python_major=$(echo "$python_version" | cut -d. -f1)
+    local python_minor=$(echo "$python_version" | cut -d. -f2)
+    
+    if [[ "$python_major" -lt 3 ]] || [[ "$python_major" -eq 3 && "$python_minor" -lt 7 ]]; then
+        log_error "Python 版本过低: $python_version，fastapi 0.103.2 需要 Python 3.7+"
+        exit 1
+    else
+        log_success "Python 版本符合要求: $python_version"
+    fi
+    
     # 升级pip（优先使用官方源，因为镜像源可能同步延迟）
     log_info "升级 pip..."
-    if pip install --upgrade pip --timeout 60 2>&1; then
+    if pip install --upgrade pip --index-url https://pypi.org/simple --timeout 60 2>&1; then
         log_success "pip 升级成功（使用官方源）"
     elif pip install --upgrade pip -i https://pypi.tuna.tsinghua.edu.cn/simple --timeout 60 2>&1; then
         log_success "pip 升级成功（使用清华镜像源）"
@@ -379,31 +393,59 @@ setup_python_venv() {
     # 安装依赖（优先使用官方源，因为新版本包可能在镜像源中不可用）
     if [[ -f requirements.txt ]]; then
         log_info "安装Python依赖包..."
-        log_info "优先尝试官方 PyPI 源（镜像源可能同步延迟）..."
+        
+        # 检查 pip 配置文件，可能已配置镜像源
+        local pip_config_file=""
+        local pip_config_backup=""
+        
+        # 检查用户级配置
+        if [[ -f ~/.pip/pip.conf ]]; then
+            pip_config_file="$HOME/.pip/pip.conf"
+        elif [[ -f ~/.config/pip/pip.conf ]]; then
+            pip_config_file="$HOME/.config/pip/pip.conf"
+        fi
+        
+        # 检查系统级配置
+        if [[ -z "$pip_config_file" ]] && [[ -f /etc/pip.conf ]]; then
+            pip_config_file="/etc/pip.conf"
+        fi
+        
+        # 如果存在配置文件且包含镜像源，临时备份并修改
+        if [[ -n "$pip_config_file" ]] && grep -q "index-url\|extra-index-url" "$pip_config_file" 2>/dev/null; then
+            log_warning "检测到 pip 配置文件已设置镜像源: $pip_config_file"
+            log_info "临时备份配置文件以使用官方源..."
+            pip_config_backup="${pip_config_file}.bak.$(date +%Y%m%d_%H%M%S)"
+            cp "$pip_config_file" "$pip_config_backup"
+            
+            # 临时注释掉镜像源配置
+            sed -i.tmp 's/^\(.*index-url.*\)/# \1/' "$pip_config_file" 2>/dev/null || true
+            sed -i.tmp 's/^\(.*extra-index-url.*\)/# \1/' "$pip_config_file" 2>/dev/null || true
+            rm -f "${pip_config_file}.tmp" 2>/dev/null || true
+        fi
         
         # 定义多个镜像源（按优先级排序）
         # 优先使用官方源，因为新版本包可能在镜像源中不可用
         local install_success=false
         local source_name=""
         
-        # 1. 首先尝试官方 PyPI 源（默认源，不指定 -i）
+        # 1. 首先尝试官方 PyPI 源（明确指定，覆盖配置文件）
         log_info "尝试使用官方 PyPI 源（推荐，版本最新）..."
-        if pip install -r requirements.txt --timeout 120 2>&1; then
+        log_info "使用 --index-url 明确指定官方源: https://pypi.org/simple"
+        
+        if pip install -r requirements.txt --index-url https://pypi.org/simple --timeout 300 2>&1; then
             install_success=true
             source_name="官方 PyPI"
         else
-            log_warning "官方源安装失败，尝试镜像源..."
+            log_warning "官方源安装失败，尝试其他镜像源..."
             
             # 2. 尝试其他镜像源（使用并行数组）
             local pip_source_urls=(
                 "https://mirrors.aliyun.com/pypi/simple"
                 "https://pypi.tuna.tsinghua.edu.cn/simple"
-                "https://pypi.douban.com/simple"
             )
             local pip_source_names=(
                 "阿里云"
                 "清华"
-                "豆瓣"
             )
             
             for i in "${!pip_source_urls[@]}"; do
@@ -416,6 +458,12 @@ setup_python_venv() {
                     break
                 fi
             done
+        fi
+        
+        # 恢复 pip 配置文件（如果备份了）
+        if [[ -n "$pip_config_backup" ]] && [[ -f "$pip_config_backup" ]]; then
+            log_info "恢复 pip 配置文件..."
+            mv "$pip_config_backup" "$pip_config_file"
         fi
         
         if [[ "$install_success" == "true" ]]; then
