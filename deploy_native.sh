@@ -161,12 +161,29 @@ install_python3_from_source() {
     # 方法1: 尝试使用 IUS 仓库安装 Python 3.8（推荐，最简单）
     log_info "方法1: 尝试使用 IUS 仓库安装 Python 3.8..."
     
-    # 安装 IUS 仓库
+    # 安装 IUS 仓库（尝试多个镜像源）
     if ! rpm -qa | grep -q ius-release; then
-        log_info "安装 IUS 仓库..."
-        yum install -y https://repo.ius.io/ius-release-el7.rpm || {
-            log_warning "IUS 仓库安装失败，尝试其他方法..."
-        }
+        log_info "安装 IUS 仓库（尝试多个镜像源）..."
+        
+        local ius_repo_installed=false
+        local ius_repo_urls=(
+            "https://repo.ius.io/ius-release-el7.rpm"
+            "https://mirrors.tuna.tsinghua.edu.cn/ius/ius-release-el7.rpm"
+            "https://mirrors.aliyun.com/ius/ius-release-el7.rpm"
+        )
+        
+        for repo_url in "${ius_repo_urls[@]}"; do
+            log_info "尝试从 $repo_url 安装 IUS 仓库..."
+            if yum install -y "$repo_url" 2>&1 | grep -q "Complete\|Installed"; then
+                ius_repo_installed=true
+                log_success "IUS 仓库安装成功"
+                break
+            fi
+        done
+        
+        if [[ "$ius_repo_installed" == "false" ]]; then
+            log_warning "所有 IUS 仓库镜像源都失败，尝试其他方法..."
+        fi
     fi
     
     # 尝试安装 Python 3.8
@@ -253,64 +270,130 @@ EOF
     fi
     
     # 方法3: 从源码编译 Python 3.8（最后手段，较慢）
-    log_info "方法3: 尝试从源码编译 Python 3.8（这可能需要较长时间）..."
+    log_info "方法3: 从源码编译 Python 3.8（自动执行，这可能需要 10-30 分钟）..."
+    log_warning "注意: 从源码编译需要较长时间，请耐心等待..."
     
-    read -p "是否从源码编译 Python 3.8? 这可能需要 10-30 分钟 (y/n): " -n 1 -r
-    echo
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        log_error "用户取消安装，无法继续部署"
-        log_info ""
-        log_info "手动安装 Python 3.7+ 的方法:"
-        log_info "1. 使用 IUS 仓库:"
-        log_info "   yum install -y https://repo.ius.io/ius-release-el7.rpm"
-        log_info "   yum install -y python38u python38u-pip python38u-devel"
-        log_info ""
-        log_info "2. 使用 SCL:"
-        log_info "   yum install -y scl-utils"
-        log_info "   yum install -y rh-python38"
-        log_info ""
-        log_info "3. 从源码编译（参考: https://tecadmin.net/install-python-3-8-on-centos-7/）"
-        exit 1
+    # 检查并安装编译工具
+    if ! command -v gcc &> /dev/null || ! command -v make &> /dev/null; then
+        log_info "安装编译工具..."
+        yum groupinstall -y "Development Tools" 2>&1 | grep -v "already installed" || {
+            yum install -y gcc gcc-c++ make
+        }
     fi
     
-    # 安装编译依赖
-    log_info "安装编译依赖..."
-    yum groupinstall -y "Development Tools" || yum install -y gcc gcc-c++ make
-    yum install -y openssl-devel bzip2-devel libffi-devel zlib-devel readline-devel sqlite-devel
+    log_info "安装 Python 编译所需的开发库..."
+    yum install -y openssl-devel bzip2-devel libffi-devel zlib-devel readline-devel sqlite-devel xz-devel 2>&1 | grep -v "already installed" || true
     
     # 下载并编译 Python 3.8
     local python_version="3.8.18"
     local python_dir="/usr/local/python38"
     
-    log_info "下载 Python ${python_version} 源码..."
+    log_info "下载 Python ${python_version} 源码（尝试多个镜像源）..."
     cd /tmp
-    wget https://www.python.org/ftp/python/${python_version}/Python-${python_version}.tgz || {
-        log_error "下载 Python 源码失败"
+    
+    local download_success=false
+    local download_urls=(
+        "https://www.python.org/ftp/python/${python_version}/Python-${python_version}.tgz"
+        "https://mirrors.huaweicloud.com/python/${python_version}/Python-${python_version}.tgz"
+        "https://mirrors.aliyun.com/python-release/${python_version}/Python-${python_version}.tgz"
+        "https://npm.taobao.org/mirrors/python/${python_version}/Python-${python_version}.tgz"
+    )
+    
+    for url in "${download_urls[@]}"; do
+        log_info "尝试从 $url 下载..."
+        if wget --timeout=30 --tries=3 "$url" -O Python-${python_version}.tgz 2>&1; then
+            if [[ -f "Python-${python_version}.tgz" ]] && [[ -s "Python-${python_version}.tgz" ]]; then
+                download_success=true
+                log_success "下载成功"
+                break
+            else
+                rm -f Python-${python_version}.tgz 2>/dev/null || true
+            fi
+        fi
+    done
+    
+    if [[ "$download_success" == "false" ]]; then
+        log_error "所有下载源都失败，无法下载 Python 源码"
+        log_info ""
+        log_info "请手动下载并安装 Python 3.8:"
+        log_info "1. 下载: wget https://www.python.org/ftp/python/3.8.18/Python-3.8.18.tgz"
+        log_info "2. 解压: tar xzf Python-3.8.18.tgz"
+        log_info "3. 编译安装: cd Python-3.8.18 && ./configure --prefix=/usr/local/python38 --enable-optimizations && make && make altinstall"
+        exit 1
+    fi
+    
+    log_info "解压源码包..."
+    tar xzf Python-${python_version}.tgz || {
+        log_error "解压失败"
         exit 1
     }
     
-    tar xzf Python-${python_version}.tgz
-    cd Python-${python_version}
+    cd Python-${python_version} || {
+        log_error "无法进入源码目录"
+        exit 1
+    }
     
-    log_info "配置编译选项..."
-    ./configure --prefix=${python_dir} --enable-optimizations --with-ensurepip=install
+    log_info "配置编译选项（这可能需要几分钟）..."
+    ./configure --prefix=${python_dir} --enable-optimizations --with-ensurepip=install 2>&1 | tee /tmp/python_configure.log || {
+        log_error "配置失败，查看日志: /tmp/python_configure.log"
+        exit 1
+    }
     
-    log_info "开始编译（这可能需要 10-30 分钟）..."
-    make -j$(nproc) || make
+    log_info "开始编译（这可能需要 10-30 分钟，请耐心等待）..."
+    log_info "使用 $(nproc) 个并行任务加速编译..."
     
-    log_info "安装 Python..."
-    make altinstall
+    # 使用 timeout 防止无限等待，最多 1 小时
+    timeout 3600 make -j$(nproc) 2>&1 | tee /tmp/python_make.log || {
+        log_warning "并行编译失败，尝试单线程编译..."
+        make 2>&1 | tee /tmp/python_make.log || {
+            log_error "编译失败，查看日志: /tmp/python_make.log"
+            exit 1
+        }
+    }
+    
+    log_info "安装 Python（这可能需要几分钟）..."
+    make altinstall 2>&1 | tee /tmp/python_install.log || {
+        log_error "安装失败，查看日志: /tmp/python_install.log"
+        exit 1
+    }
     
     # 创建软链接
-    ln -sf ${python_dir}/bin/python3.8 /usr/bin/python3.8
-    ln -sf ${python_dir}/bin/python3.8 /usr/bin/python3
-    ln -sf ${python_dir}/bin/pip3.8 /usr/bin/pip3
+    log_info "创建 Python 3.8 软链接..."
+    if [[ -f ${python_dir}/bin/python3.8 ]]; then
+        ln -sf ${python_dir}/bin/python3.8 /usr/bin/python3.8 2>/dev/null || true
+        ln -sf ${python_dir}/bin/python3.8 /usr/bin/python3 2>/dev/null || true
+        
+        # 安装 pip（如果还没有）
+        if [[ -f ${python_dir}/bin/pip3.8 ]]; then
+            ln -sf ${python_dir}/bin/pip3.8 /usr/bin/pip3 2>/dev/null || true
+        else
+            log_info "安装 pip..."
+            ${python_dir}/bin/python3.8 -m ensurepip --upgrade || {
+                curl -sSL https://bootstrap.pypa.io/get-pip.py | ${python_dir}/bin/python3.8
+            }
+            if [[ -f ${python_dir}/bin/pip3.8 ]]; then
+                ln -sf ${python_dir}/bin/pip3.8 /usr/bin/pip3 2>/dev/null || true
+            fi
+        fi
+        
+        # 验证安装
+        if python3.8 --version 2>&1 | grep -q "3.8"; then
+            log_success "Python 3.8 编译安装完成"
+            log_info "Python 版本: $(python3.8 --version 2>&1)"
+        else
+            log_error "Python 3.8 安装验证失败"
+            exit 1
+        fi
+    else
+        log_error "Python 3.8 可执行文件不存在: ${python_dir}/bin/python3.8"
+        exit 1
+    fi
     
-    log_success "Python 3.8 编译安装完成"
-    
-    # 清理
-    cd /
-    rm -rf /tmp/Python-${python_version}*
+    # 清理（可选，保留源码以便调试）
+    log_info "清理临时文件..."
+    cd / 2>/dev/null || true
+    # 保留源码一段时间以便调试，可以手动删除
+    # rm -rf /tmp/Python-${python_version}*
 }
 
 # 检查并安装PostgreSQL
