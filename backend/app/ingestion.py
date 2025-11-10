@@ -1,7 +1,7 @@
 import argparse
 import json
 import os
-from typing import List, Set
+from typing import List, Set, Optional
 
 from sqlalchemy.orm import Session
 from backend.app.database import SessionLocal, engine, Base
@@ -64,7 +64,7 @@ def _normalize_source_type(value, obj) -> int:
 _ST_FIX_RE = re.compile(r'("source_type"\s*:\s*)(gold_league|season_play_pvp_mgr)\b')
 
 
-def _robust_json_load(line: str) -> dict | None:
+def _robust_json_load(line: str) -> Optional[dict]:
     """Try strict JSON first; if failed, fix known patterns then retry."""
     try:
         return json.loads(line)

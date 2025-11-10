@@ -1,6 +1,6 @@
 import os
 import json
-from typing import List, Iterable, Set
+from typing import List, Iterable, Set, Optional
 import re
 
 from sqlalchemy.orm import Session
@@ -12,7 +12,7 @@ from backend.app.models import MatchRecord
 _ST_FIX_RE = re.compile(r'("source_type"\s*:\s*)(gold_league|season_play_pvp_mgr)\b')
 
 
-def _robust_json_load(line: str) -> dict | None:
+def _robust_json_load(line: str) -> Optional[dict]:
     try:
         return json.loads(line)
     except Exception:

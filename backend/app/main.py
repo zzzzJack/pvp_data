@@ -28,7 +28,7 @@ def _ensure_tables():
         print("Tables will be created on first database access")
 
 templates = Jinja2Templates(directory="backend/app/templates")
-_scheduler: BackgroundScheduler | None = None
+_scheduler: Optional[BackgroundScheduler] = None
 
 @app.on_event("startup")
 def _start_scheduler():
