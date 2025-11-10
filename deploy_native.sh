@@ -1060,6 +1060,111 @@ PYEOF
     fi
 }
 
+# 配置防火墙（开放端口）
+configure_firewall() {
+    log_info "检查并配置防火墙..."
+    
+    local port=8090
+    local firewall_configured=false
+    
+    # 检查 firewalld（CentOS 7 默认）
+    if command -v firewall-cmd &> /dev/null; then
+        if systemctl is-active --quiet firewalld; then
+            log_info "检测到 firewalld 正在运行"
+            
+            # 检查端口是否已开放
+            if firewall-cmd --query-port=${port}/tcp &>/dev/null && firewall-cmd --query-port=${port}/tcp | grep -q "yes"; then
+                log_success "端口 ${port} 已在防火墙中开放"
+                firewall_configured=true
+            else
+                log_info "开放端口 ${port}/tcp..."
+                if firewall-cmd --permanent --add-port=${port}/tcp 2>&1; then
+                    firewall-cmd --reload 2>&1
+                    if firewall-cmd --query-port=${port}/tcp | grep -q "yes"; then
+                        log_success "端口 ${port} 已成功开放"
+                        firewall_configured=true
+                    else
+                        log_warning "端口开放可能失败，请手动检查"
+                    fi
+                else
+                    log_warning "firewall-cmd 配置失败"
+                fi
+            fi
+        else
+            log_info "firewalld 未运行，跳过配置"
+        fi
+    fi
+    
+    # 检查 iptables（如果没有 firewalld）
+    if [[ "$firewall_configured" == "false" ]] && command -v iptables &> /dev/null; then
+        log_info "检查 iptables 规则..."
+        if iptables -L INPUT -n | grep -q ":${port}"; then
+            log_success "端口 ${port} 已在 iptables 中配置"
+            firewall_configured=true
+        else
+            log_warning "iptables 中未找到端口 ${port} 的规则"
+            log_info "如果需要，可以手动添加:"
+            log_info "  iptables -I INPUT -p tcp --dport ${port} -j ACCEPT"
+            log_info "  service iptables save"
+        fi
+    fi
+    
+    if [[ "$firewall_configured" == "false" ]]; then
+        log_warning "未检测到防火墙或无法自动配置"
+        log_info "如果无法访问，请检查:"
+        log_info "1. 防火墙是否阻止了端口 ${port}"
+        log_info "2. 云服务器安全组是否开放了端口 ${port}"
+        log_info "3. 服务是否正在运行: systemctl status pvp-data"
+    fi
+}
+
+# 检查服务状态和端口监听
+check_service_status() {
+    log_info "检查服务状态..."
+    
+    local port=8090
+    local service_running=false
+    local port_listening=false
+    
+    # 检查 systemd 服务
+    if systemctl list-unit-files | grep -q "pvp-data.service"; then
+        if systemctl is-active --quiet pvp-data; then
+            log_success "systemd 服务正在运行"
+            service_running=true
+        else
+            log_warning "systemd 服务未运行"
+            log_info "启动服务: systemctl start pvp-data"
+        fi
+    else
+        log_info "systemd 服务未创建，需要手动启动服务"
+    fi
+    
+    # 检查端口监听
+    if netstat -tuln 2>/dev/null | grep -q ":${port} " || ss -tuln 2>/dev/null | grep -q ":${port} "; then
+        log_success "端口 ${port} 正在监听"
+        port_listening=true
+        
+        # 显示监听详情
+        log_info "端口监听详情:"
+        netstat -tuln 2>/dev/null | grep ":${port} " || ss -tuln 2>/dev/null | grep ":${port} "
+    else
+        log_warning "端口 ${port} 未在监听"
+        log_info "请确保服务已启动"
+    fi
+    
+    # 测试本地连接
+    log_info "测试本地连接..."
+    if curl -sf http://localhost:${port}/api/health > /dev/null 2>&1; then
+        log_success "本地连接测试成功"
+    else
+        log_warning "本地连接测试失败"
+        log_info "可能原因:"
+        log_info "1. 服务未启动"
+        log_info "2. 服务绑定地址不正确"
+        log_info "3. 应用启动失败（查看日志: journalctl -u pvp-data -n 50）"
+    fi
+}
+
 # 创建systemd服务文件（可选）
 create_systemd_service() {
     log_info "创建systemd服务文件..."
@@ -1095,11 +1200,16 @@ WantedBy=multi-user.target
 EOF
 
     log_success "systemd服务文件已创建: $service_file"
+    
+    # 重新加载 systemd
+    systemctl daemon-reload
+    
     log_info "可以使用以下命令管理服务:"
     log_info "  启动服务: systemctl start pvp-data"
     log_info "  停止服务: systemctl stop pvp-data"
     log_info "  查看状态: systemctl status pvp-data"
     log_info "  开机自启: systemctl enable pvp-data"
+    log_info "  查看日志: journalctl -u pvp-data -f"
 }
 
 # 显示部署信息
@@ -1176,8 +1286,24 @@ main() {
     echo
     if [[ $REPLY =~ ^[Yy]$ ]]; then
         create_systemd_service
-        systemctl daemon-reload
-        log_info "可以使用 'systemctl start pvp-data' 启动服务"
+        
+        # 配置防火墙
+        configure_firewall
+        
+        # 询问是否立即启动服务
+        read -p "是否立即启动服务? (y/n): " -n 1 -r
+        echo
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            log_info "启动服务..."
+            systemctl start pvp-data
+            sleep 2
+            
+            # 检查服务状态
+            check_service_status
+        fi
+    else
+        # 即使不创建 systemd 服务，也配置防火墙
+        configure_firewall
     fi
     
     # 显示部署信息
