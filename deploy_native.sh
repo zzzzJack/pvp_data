@@ -1301,6 +1301,30 @@ main() {
             # 检查服务状态
             check_service_status
         fi
+        
+        # 询问是否配置 Nginx 反向代理
+        echo ""
+        read -p "是否配置 Nginx 反向代理（使用 80 端口访问）? (y/n): " -n 1 -r
+        echo
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            log_info "配置 Nginx 反向代理..."
+            if [[ -f "setup_nginx.sh" ]]; then
+                bash setup_nginx.sh
+            else
+                log_warning "setup_nginx.sh 脚本不存在"
+                log_info "可以手动配置 Nginx，参考配置:"
+                log_info "  server {"
+                log_info "    listen 80;"
+                log_info "    server_name $(hostname -I | awk '{print $1}');"
+                log_info "    location / {"
+                log_info "      proxy_pass http://127.0.0.1:8090;"
+                log_info "      proxy_set_header Host \$host;"
+                log_info "      proxy_set_header X-Real-IP \$remote_addr;"
+                log_info "      proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;"
+                log_info "    }"
+                log_info "  }"
+            fi
+        fi
     else
         # 即使不创建 systemd 服务，也配置防火墙
         configure_firewall
