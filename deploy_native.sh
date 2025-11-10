@@ -366,20 +366,70 @@ setup_python_venv() {
         exit 1
     }
     
-    # 升级pip
-    pip install --upgrade pip -i https://pypi.tuna.tsinghua.edu.cn/simple || {
-        log_warning "使用清华镜像源失败，尝试官方源..."
-        pip install --upgrade pip
-    }
+    # 升级pip（优先使用官方源，因为镜像源可能同步延迟）
+    log_info "升级 pip..."
+    if pip install --upgrade pip --timeout 60 2>&1; then
+        log_success "pip 升级成功（使用官方源）"
+    elif pip install --upgrade pip -i https://pypi.tuna.tsinghua.edu.cn/simple --timeout 60 2>&1; then
+        log_success "pip 升级成功（使用清华镜像源）"
+    else
+        log_warning "pip 升级失败，继续尝试安装依赖..."
+    fi
     
-    # 安装依赖
+    # 安装依赖（优先使用官方源，因为新版本包可能在镜像源中不可用）
     if [[ -f requirements.txt ]]; then
         log_info "安装Python依赖包..."
-        pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple || {
-            log_warning "使用清华镜像源失败，尝试官方源..."
-            pip install -r requirements.txt
-        }
-        log_success "Python依赖安装完成"
+        log_info "优先尝试官方 PyPI 源（镜像源可能同步延迟）..."
+        
+        # 定义多个镜像源（按优先级排序）
+        # 优先使用官方源，因为新版本包可能在镜像源中不可用
+        local install_success=false
+        local source_name=""
+        
+        # 1. 首先尝试官方 PyPI 源（默认源，不指定 -i）
+        log_info "尝试使用官方 PyPI 源（推荐，版本最新）..."
+        if pip install -r requirements.txt --timeout 120 2>&1; then
+            install_success=true
+            source_name="官方 PyPI"
+        else
+            log_warning "官方源安装失败，尝试镜像源..."
+            
+            # 2. 尝试其他镜像源（使用并行数组）
+            local pip_source_urls=(
+                "https://mirrors.aliyun.com/pypi/simple"
+                "https://pypi.tuna.tsinghua.edu.cn/simple"
+                "https://pypi.douban.com/simple"
+            )
+            local pip_source_names=(
+                "阿里云"
+                "清华"
+                "豆瓣"
+            )
+            
+            for i in "${!pip_source_urls[@]}"; do
+                local source_url="${pip_source_urls[$i]}"
+                source_name="${pip_source_names[$i]}"
+                
+                log_info "尝试使用镜像源: $source_name ($source_url)"
+                if pip install -r requirements.txt -i "$source_url" --timeout 120 2>&1; then
+                    install_success=true
+                    break
+                fi
+            done
+        fi
+        
+        if [[ "$install_success" == "true" ]]; then
+            log_success "Python依赖安装完成（使用: $source_name）"
+        else
+            log_error "所有镜像源都失败，无法安装依赖"
+            log_info ""
+            log_info "建议的解决方案:"
+            log_info "1. 检查网络连接"
+            log_info "2. 手动安装: pip install -r requirements.txt"
+            log_info "3. 如果镜像源版本过旧，必须使用官方源:"
+            log_info "   pip install -r requirements.txt --timeout 300"
+            exit 1
+        fi
     else
         log_error "未找到requirements.txt文件"
         exit 1
