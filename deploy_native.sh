@@ -796,11 +796,36 @@ setup_python_venv() {
         log_success "Python 版本符合要求: $python_version"
     fi
     
+    # 检查并修复 pip
+    log_info "检查 pip 是否可用..."
+    if ! python -m pip --version 2>/dev/null && ! pip --version 2>/dev/null; then
+        log_warning "虚拟环境中的 pip 不可用，重新安装 pip..."
+        
+        # 尝试使用 ensurepip
+        if python -m ensurepip --upgrade 2>&1; then
+            log_success "pip 安装成功（使用 ensurepip）"
+        else
+            log_warning "ensurepip 失败，尝试使用 get-pip.py..."
+            curl -sSL https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py || {
+                log_error "下载 get-pip.py 失败"
+                exit 1
+            }
+            if python /tmp/get-pip.py 2>&1; then
+                log_success "pip 安装成功（使用 get-pip.py）"
+            else
+                log_error "pip 安装失败"
+                exit 1
+            fi
+        fi
+    else
+        log_success "pip 可用"
+    fi
+    
     # 升级pip（优先使用官方源，因为镜像源可能同步延迟）
     log_info "升级 pip..."
-    if pip install --upgrade pip --index-url https://pypi.org/simple --timeout 60 2>&1; then
+    if python -m pip install --upgrade pip --index-url https://pypi.org/simple --timeout 60 2>&1; then
         log_success "pip 升级成功（使用官方源）"
-    elif pip install --upgrade pip -i https://pypi.tuna.tsinghua.edu.cn/simple --timeout 60 2>&1; then
+    elif python -m pip install --upgrade pip -i https://pypi.tuna.tsinghua.edu.cn/simple --timeout 60 2>&1; then
         log_success "pip 升级成功（使用清华镜像源）"
     else
         log_warning "pip 升级失败，继续尝试安装依赖..."
@@ -886,7 +911,19 @@ setup_python_venv() {
             log_info "使用本地缓存加速安装"
         fi
         
-        if pip install -r "$requirements_file" --index-url https://pypi.org/simple --timeout 300 $pip_cache_args 2>&1; then
+        # 使用 python -m pip 而不是直接调用 pip（更可靠）
+        local pip_cmd="python -m pip"
+        if ! python -m pip --version 2>/dev/null; then
+            # 如果 python -m pip 不可用，尝试直接调用 pip
+            if pip --version 2>/dev/null; then
+                pip_cmd="pip"
+            else
+                log_error "pip 不可用，请先修复 pip"
+                exit 1
+            fi
+        fi
+        
+        if $pip_cmd install -r "$requirements_file" --index-url https://pypi.org/simple --timeout 300 $pip_cache_args 2>&1; then
             install_success=true
             source_name="官方 PyPI"
         else
@@ -907,7 +944,7 @@ setup_python_venv() {
                 source_name="${pip_source_names[$i]}"
                 
                 log_info "尝试使用镜像源: $source_name ($source_url)"
-                if pip install -r "$requirements_file" -i "$source_url" --timeout 120 $pip_cache_args 2>&1; then
+                if $pip_cmd install -r "$requirements_file" -i "$source_url" --timeout 120 $pip_cache_args 2>&1; then
                     install_success=true
                     break
                 fi
