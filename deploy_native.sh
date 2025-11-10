@@ -117,8 +117,26 @@ install_python3() {
         install_python3_from_source
     fi
     
-    # 检查pip
-    if ! command -v pip3 &> /dev/null; then
+    # 检查pip（确保使用正确的版本）
+    log_info "检查 pip..."
+    
+    # 如果安装了 Python 3.8，优先使用 pip3.8
+    if command -v python3.8 &> /dev/null; then
+        if ! command -v pip3.8 &> /dev/null; then
+            log_info "为 Python 3.8 安装 pip..."
+            python3.8 -m ensurepip --upgrade || {
+                curl -sSL https://bootstrap.pypa.io/get-pip.py | python3.8
+            }
+        fi
+        # 创建 pip3 软链接指向 pip3.8
+        if command -v pip3.8 &> /dev/null; then
+            local pip38_path=$(which pip3.8)
+            local current_pip3_link=$(readlink /usr/bin/pip3 2>/dev/null || echo "")
+            if [[ ! -f /usr/bin/pip3 ]] || [[ "$current_pip3_link" != *"pip3.8"* ]]; then
+                ln -sf "$pip38_path" /usr/bin/pip3 2>/dev/null || true
+            fi
+        fi
+    elif ! command -v pip3 &> /dev/null; then
         log_info "安装pip..."
         yum install -y python3-pip || {
             log_warning "yum安装pip失败，尝试使用get-pip.py..."
@@ -126,27 +144,173 @@ install_python3() {
         }
     fi
     
-    log_success "Python 3环境就绪"
+    # 验证 Python 和 pip 版本
+    local final_python_version=$(python3 --version 2>&1 | grep -oE '[0-9]+\.[0-9]+' | head -1)
+    log_success "Python 3环境就绪: Python $final_python_version"
+    
+    if command -v pip3 &> /dev/null; then
+        local pip_version=$(pip3 --version 2>&1 | head -1)
+        log_info "pip 版本: $pip_version"
+    fi
 }
 
 # 从源码安装Python 3（如果需要）
 install_python3_from_source() {
-    log_info "从EPEL仓库安装Python 3..."
+    log_info "尝试安装 Python 3.7+..."
     
-    # 安装EPEL仓库
-    if ! rpm -qa | grep -q epel-release; then
-        log_info "安装EPEL仓库..."
-        yum install -y epel-release || {
-            log_warning "EPEL安装失败，尝试使用阿里云镜像..."
-            yum install -y https://mirrors.aliyun.com/epel/epel-release-latest-7.noarch.rpm || true
+    # 方法1: 尝试使用 IUS 仓库安装 Python 3.8（推荐，最简单）
+    log_info "方法1: 尝试使用 IUS 仓库安装 Python 3.8..."
+    
+    # 安装 IUS 仓库
+    if ! rpm -qa | grep -q ius-release; then
+        log_info "安装 IUS 仓库..."
+        yum install -y https://repo.ius.io/ius-release-el7.rpm || {
+            log_warning "IUS 仓库安装失败，尝试其他方法..."
         }
     fi
     
-    # 安装Python 3
-    yum install -y python3 python3-pip python3-devel || {
-        log_error "Python 3安装失败"
+    # 尝试安装 Python 3.8
+    log_info "安装 Python 3.8 及相关包..."
+    if yum install -y python38u python38u-pip python38u-devel > /tmp/python_install.log 2>&1; then
+        log_success "Python 3.8 安装成功（来自 IUS 仓库）"
+        
+        # 等待一下让系统更新
+        sleep 2
+        
+        # 查找 python3.8 的实际位置
+        local python38_path=$(which python3.8 2>/dev/null || find /usr -name python3.8 2>/dev/null | head -1)
+        
+        if [[ -z "$python38_path" ]]; then
+            # 尝试常见路径
+            if [[ -f /usr/bin/python3.8 ]]; then
+                python38_path="/usr/bin/python3.8"
+            elif [[ -f /usr/local/bin/python3.8 ]]; then
+                python38_path="/usr/local/bin/python3.8"
+            fi
+        fi
+        
+        if [[ -n "$python38_path" ]]; then
+            # 创建 python3.8 的软链接（如果不存在）
+            if [[ ! -f /usr/bin/python3.8 ]]; then
+                ln -sf "$python38_path" /usr/bin/python3.8 2>/dev/null || true
+            fi
+            
+            # 更新 python3 命令指向 python3.8
+            # 备份原有的 python3（如果存在且不是 3.8）
+            if command -v python3 &> /dev/null; then
+                local current_py3=$(python3 --version 2>&1 | grep -oE '[0-9]+\.[0-9]+' | head -1)
+                if [[ "$current_py3" != "3.8" ]]; then
+                    mv /usr/bin/python3 /usr/bin/python3.old 2>/dev/null || true
+                fi
+            fi
+            ln -sf "$python38_path" /usr/bin/python3 2>/dev/null || true
+            
+            # 验证安装
+            if python3.8 --version 2>&1 | grep -q "3.8"; then
+                log_success "已更新 python3 命令指向 Python 3.8"
+                log_info "Python 版本: $(python3.8 --version 2>&1)"
+                return 0
+            else
+                log_warning "Python 3.8 安装可能不完整，继续尝试其他方法..."
+            fi
+        else
+            log_warning "无法找到 python3.8 可执行文件，继续尝试其他方法..."
+        fi
+    else
+        log_warning "IUS 仓库安装 Python 3.8 失败"
+        log_info "安装日志: /tmp/python_install.log"
+    fi
+    
+    # 方法2: 尝试使用 SCL (Software Collections)
+    log_info "方法2: 尝试使用 SCL 安装 Python 3.8..."
+    
+    # 安装 SCL
+    if ! rpm -qa | grep -q scl-utils; then
+        yum install -y scl-utils || true
+    fi
+    
+    # 尝试安装 rh-python38
+    if yum install -y rh-python38 rh-python38-python-devel 2>&1; then
+        log_success "Python 3.8 安装成功（来自 SCL）"
+        log_info "注意: 使用 SCL 时，需要运行 'scl enable rh-python38 bash' 来激活"
+        log_info "或者使用完整路径: /opt/rh/rh-python38/root/usr/bin/python3"
+        
+        # 创建便捷的 python3 命令
+        cat > /usr/local/bin/python3 << 'EOF'
+#!/bin/bash
+/opt/rh/rh-python38/root/usr/bin/python3 "$@"
+EOF
+        chmod +x /usr/local/bin/python3
+        
+        # 安装 pip
+        /opt/rh/rh-python38/root/usr/bin/python3 -m ensurepip --upgrade || {
+            curl -sSL https://bootstrap.pypa.io/get-pip.py | /opt/rh/rh-python38/root/usr/bin/python3
+        }
+        
+        return 0
+    else
+        log_warning "SCL 安装 Python 3.8 失败"
+    fi
+    
+    # 方法3: 从源码编译 Python 3.8（最后手段，较慢）
+    log_info "方法3: 尝试从源码编译 Python 3.8（这可能需要较长时间）..."
+    
+    read -p "是否从源码编译 Python 3.8? 这可能需要 10-30 分钟 (y/n): " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        log_error "用户取消安装，无法继续部署"
+        log_info ""
+        log_info "手动安装 Python 3.7+ 的方法:"
+        log_info "1. 使用 IUS 仓库:"
+        log_info "   yum install -y https://repo.ius.io/ius-release-el7.rpm"
+        log_info "   yum install -y python38u python38u-pip python38u-devel"
+        log_info ""
+        log_info "2. 使用 SCL:"
+        log_info "   yum install -y scl-utils"
+        log_info "   yum install -y rh-python38"
+        log_info ""
+        log_info "3. 从源码编译（参考: https://tecadmin.net/install-python-3-8-on-centos-7/）"
+        exit 1
+    fi
+    
+    # 安装编译依赖
+    log_info "安装编译依赖..."
+    yum groupinstall -y "Development Tools" || yum install -y gcc gcc-c++ make
+    yum install -y openssl-devel bzip2-devel libffi-devel zlib-devel readline-devel sqlite-devel
+    
+    # 下载并编译 Python 3.8
+    local python_version="3.8.18"
+    local python_dir="/usr/local/python38"
+    
+    log_info "下载 Python ${python_version} 源码..."
+    cd /tmp
+    wget https://www.python.org/ftp/python/${python_version}/Python-${python_version}.tgz || {
+        log_error "下载 Python 源码失败"
         exit 1
     }
+    
+    tar xzf Python-${python_version}.tgz
+    cd Python-${python_version}
+    
+    log_info "配置编译选项..."
+    ./configure --prefix=${python_dir} --enable-optimizations --with-ensurepip=install
+    
+    log_info "开始编译（这可能需要 10-30 分钟）..."
+    make -j$(nproc) || make
+    
+    log_info "安装 Python..."
+    make altinstall
+    
+    # 创建软链接
+    ln -sf ${python_dir}/bin/python3.8 /usr/bin/python3.8
+    ln -sf ${python_dir}/bin/python3.8 /usr/bin/python3
+    ln -sf ${python_dir}/bin/pip3.8 /usr/bin/pip3
+    
+    log_success "Python 3.8 编译安装完成"
+    
+    # 清理
+    cd /
+    rm -rf /tmp/Python-${python_version}*
 }
 
 # 检查并安装PostgreSQL
