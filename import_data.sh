@@ -72,15 +72,57 @@ log_info "待导入文件数: $new_files"
 
 if [[ $new_files -eq 0 ]] && [[ $jsonl_files -gt 0 ]]; then
     log_warning "所有文件都已导入"
-    read -p "是否重新导入所有数据（删除 .done 标记）? (y/n): " -n 1 -r
-    echo
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        log_info "删除 .done 标记文件..."
-        find "$IMPORT_DIR" -type f -name "*.done" -delete 2>/dev/null || true
-        log_success "已清除导入标记，将重新导入所有数据"
+    
+    # 检查数据库是否有数据
+    log_info "检查数据库记录数..."
+    db_count=$(python3 << 'PYEOF'
+import os
+from sqlalchemy import text
+from backend.app.database import SessionLocal
+
+os.environ.setdefault('POSTGRES_HOST', 'localhost')
+os.environ.setdefault('POSTGRES_PORT', '5432')
+os.environ.setdefault('POSTGRES_USER', 'app')
+os.environ.setdefault('POSTGRES_PASSWORD', 'app')
+os.environ.setdefault('POSTGRES_DB', 'pvp')
+
+try:
+    with SessionLocal() as db:
+        result = db.execute(text("SELECT COUNT(*) FROM match_records;"))
+        total = result.scalar()
+        print(total)
+except Exception as e:
+    print("0")
+PYEOF
+)
+    
+    if [[ "$db_count" == "0" ]]; then
+        log_warning "数据库中没有记录，但文件已标记为已导入"
+        log_info "可能是之前的导入失败，建议重新导入"
+        read -p "是否删除 .done 标记并重新导入? (y/n): " -n 1 -r
+        echo
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            log_info "删除 .done 标记文件..."
+            find "$IMPORT_DIR" -type f -name "*.done" -delete 2>/dev/null || true
+            log_success "已清除导入标记，将重新导入所有数据"
+            new_files=$jsonl_files
+        else
+            log_info "取消导入"
+            exit 0
+        fi
     else
-        log_info "取消导入"
-        exit 0
+        log_info "数据库已有 $db_count 条记录"
+        read -p "是否重新导入所有数据（删除 .done 标记）? (y/n): " -n 1 -r
+        echo
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            log_info "删除 .done 标记文件..."
+            find "$IMPORT_DIR" -type f -name "*.done" -delete 2>/dev/null || true
+            log_success "已清除导入标记，将重新导入所有数据"
+            new_files=$jsonl_files
+        else
+            log_info "取消导入"
+            exit 0
+        fi
     fi
 fi
 
@@ -102,6 +144,58 @@ echo ""
 case $REPLY in
     1)
         log_info "使用自动导入模式（跳过已导入的文件）..."
+        
+        # 先测试解析一个文件，检查数据格式
+        log_info "检查数据文件格式..."
+        test_file=$(find "$IMPORT_DIR" -type f \( -name "*.jsonl" -o -name "*.txt" \) ! -name "*.done" | head -n 1)
+        if [[ -n "$test_file" ]]; then
+            test_result=$(python3 << PYEOF
+import json
+import sys
+
+test_file = '''$test_file'''
+try:
+    with open(test_file, 'r', encoding='utf-8') as f:
+        line_count = 0
+        valid_count = 0
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            line_count += 1
+            try:
+                obj = json.loads(line)
+                if isinstance(obj, dict) and 'server' in obj and 'timestamp' in obj:
+                    valid_count += 1
+            except:
+                pass
+            if line_count >= 10:  # 只检查前10行
+                break
+        if line_count == 0:
+            print("EMPTY")
+        elif valid_count == 0:
+            print("INVALID")
+        else:
+            print(f"OK:{valid_count}/{line_count}")
+except Exception as e:
+    print(f"ERROR:{e}")
+PYEOF
+)
+            if [[ "$test_result" == "EMPTY" ]]; then
+                log_error "数据文件为空: $test_file"
+                exit 1
+            elif [[ "$test_result" == "INVALID" ]]; then
+                log_error "数据文件格式无效: $test_file"
+                log_info "请检查文件是否为有效的 JSONL 格式（每行一个 JSON 对象）"
+                exit 1
+            elif [[ "$test_result" =~ ^ERROR: ]]; then
+                log_error "读取文件失败: ${test_result#ERROR:}"
+                exit 1
+            else
+                log_success "数据文件格式检查通过: ${test_result#OK:}"
+            fi
+        fi
+        
         log_info "设置环境变量..."
         export IMPORT_DIR="$IMPORT_DIR"
         export EXCLUDE_SERVERS="$EXCLUDE_SERVERS"
@@ -120,6 +214,9 @@ from backend.app.auto_importer import run_import_once
 logs_dir = os.environ.get('IMPORT_DIR', 'data_logs')
 count = run_import_once(logs_dir)
 print(f"\n导入完成！共导入 {count} 条记录")
+if count == 0:
+    print("\n提示: 如果文件已存在 .done 标记，将被跳过")
+    print("      如需重新导入，请选择选项 2 或先删除 .done 标记文件")
 sys.exit(0 if count >= 0 else 1)
 PYEOF
         
