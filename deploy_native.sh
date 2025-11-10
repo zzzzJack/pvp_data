@@ -273,6 +273,14 @@ EOF
     log_info "方法3: 从源码编译 Python 3.8（自动执行，这可能需要 10-30 分钟）..."
     log_warning "注意: 从源码编译需要较长时间，请耐心等待..."
     
+    # 检查是否有之前失败的安装，需要清理
+    local python_dir="/usr/local/python38"
+    if [[ -d "$python_dir" ]] && [[ ! -f "$python_dir/bin/python3.8" ]] || \
+       ([[ -f "$python_dir/bin/python3.8" ]] && ! "$python_dir/bin/python3.8" --version 2>&1 | grep -q "3.8"); then
+        log_warning "检测到之前不完整的安装，清理中..."
+        rm -rf "$python_dir" 2>/dev/null || true
+    fi
+    
     # 检查并安装编译工具
     if ! command -v gcc &> /dev/null || ! command -v make &> /dev/null; then
         log_info "安装编译工具..."
@@ -334,7 +342,8 @@ EOF
     }
     
     log_info "配置编译选项（这可能需要几分钟）..."
-    ./configure --prefix=${python_dir} --enable-optimizations --with-ensurepip=install 2>&1 | tee /tmp/python_configure.log || {
+    # 不使用 --enable-optimizations 可以加快编译速度，避免某些问题
+    ./configure --prefix=${python_dir} --with-ensurepip=install 2>&1 | tee /tmp/python_configure.log || {
         log_error "配置失败，查看日志: /tmp/python_configure.log"
         exit 1
     }
@@ -342,46 +351,146 @@ EOF
     log_info "开始编译（这可能需要 10-30 分钟，请耐心等待）..."
     log_info "使用 $(nproc) 个并行任务加速编译..."
     
+    # 先清理之前的编译结果
+    make clean 2>/dev/null || true
+    
     # 使用 timeout 防止无限等待，最多 1 小时
-    timeout 3600 make -j$(nproc) 2>&1 | tee /tmp/python_make.log || {
-        log_warning "并行编译失败，尝试单线程编译..."
-        make 2>&1 | tee /tmp/python_make.log || {
-            log_error "编译失败，查看日志: /tmp/python_make.log"
+    if timeout 3600 make -j$(nproc) 2>&1 | tee /tmp/python_make.log; then
+        log_success "编译成功"
+    else
+        local make_exit_code=$?
+        if [[ $make_exit_code -eq 124 ]]; then
+            log_error "编译超时（超过1小时）"
             exit 1
-        }
-    }
+        else
+            log_warning "并行编译失败，尝试单线程编译..."
+            if make 2>&1 | tee -a /tmp/python_make.log; then
+                log_success "单线程编译成功"
+            else
+                log_error "编译失败，查看日志: /tmp/python_make.log"
+                exit 1
+            fi
+        fi
+    fi
     
     log_info "安装 Python（这可能需要几分钟）..."
-    make altinstall 2>&1 | tee /tmp/python_install.log || {
-        log_error "安装失败，查看日志: /tmp/python_install.log"
-        exit 1
-    }
+    # 先尝试 make install（完整安装），如果失败再尝试 altinstall
+    if make install 2>&1 | tee /tmp/python_install.log; then
+        log_success "Python 安装成功（完整安装）"
+    else
+        log_warning "完整安装失败，尝试 altinstall..."
+        # 清理部分安装的文件
+        rm -rf ${python_dir}/bin/python3.8 ${python_dir}/lib/python3.8 2>/dev/null || true
+        
+        # 重新编译（可能需要）
+        make clean 2>/dev/null || true
+        make -j$(nproc) 2>&1 | tee /tmp/python_make2.log || make 2>&1 | tee /tmp/python_make2.log || {
+            log_error "重新编译失败"
+            exit 1
+        }
+        
+        # 尝试 altinstall
+        if make altinstall 2>&1 | tee -a /tmp/python_install.log; then
+            log_success "Python 安装成功（altinstall）"
+        else
+            log_error "安装失败，查看日志: /tmp/python_install.log"
+            log_info "尝试手动修复..."
+            
+            # 检查是否至少 python3.8 可执行文件存在
+            if [[ -f ${python_dir}/bin/python3.8 ]]; then
+                log_info "Python 可执行文件存在，尝试修复库路径..."
+                # 设置 PYTHONHOME 环境变量
+                export PYTHONHOME=${python_dir}
+                
+                # 尝试运行 python3.8 看看是否能工作
+                if ${python_dir}/bin/python3.8 --version 2>&1 | grep -q "3.8"; then
+                    log_success "Python 3.8 可以运行"
+                else
+                    log_error "Python 3.8 无法正常运行，可能需要重新编译"
+                    exit 1
+                fi
+            else
+                log_error "Python 可执行文件不存在，安装完全失败"
+                exit 1
+            fi
+        fi
+    fi
     
     # 创建软链接
     log_info "创建 Python 3.8 软链接..."
     if [[ -f ${python_dir}/bin/python3.8 ]]; then
+        # 设置环境变量
+        export PYTHONHOME=${python_dir}
+        export PATH=${python_dir}/bin:$PATH
+        
+        # 创建软链接
         ln -sf ${python_dir}/bin/python3.8 /usr/bin/python3.8 2>/dev/null || true
         ln -sf ${python_dir}/bin/python3.8 /usr/bin/python3 2>/dev/null || true
         
-        # 安装 pip（如果还没有）
-        if [[ -f ${python_dir}/bin/pip3.8 ]]; then
-            ln -sf ${python_dir}/bin/pip3.8 /usr/bin/pip3 2>/dev/null || true
+        # 验证 Python 是否可以运行
+        log_info "验证 Python 安装..."
+        if ${python_dir}/bin/python3.8 --version 2>&1 | grep -q "3.8"; then
+            local py_version=$(${python_dir}/bin/python3.8 --version 2>&1)
+            log_success "Python 可以运行: $py_version"
         else
-            log_info "安装 pip..."
-            ${python_dir}/bin/python3.8 -m ensurepip --upgrade || {
-                curl -sSL https://bootstrap.pypa.io/get-pip.py | ${python_dir}/bin/python3.8
-            }
-            if [[ -f ${python_dir}/bin/pip3.8 ]]; then
-                ln -sf ${python_dir}/bin/pip3.8 /usr/bin/pip3 2>/dev/null || true
+            log_error "Python 无法正常运行"
+            log_info "检查 Python 库文件..."
+            if [[ ! -d ${python_dir}/lib/python3.8 ]]; then
+                log_error "Python 库目录不存在，安装不完整"
+                log_info "尝试重新安装..."
+                make install 2>&1 | tee /tmp/python_reinstall.log || {
+                    log_error "重新安装失败"
+                    exit 1
+                }
             fi
         fi
         
-        # 验证安装
+        # 安装 pip（如果还没有）
+        log_info "安装 pip..."
+        if [[ -f ${python_dir}/bin/pip3.8 ]] || [[ -f ${python_dir}/bin/pip3 ]]; then
+            log_success "pip 已存在"
+            if [[ -f ${python_dir}/bin/pip3.8 ]]; then
+                ln -sf ${python_dir}/bin/pip3.8 /usr/bin/pip3 2>/dev/null || true
+            elif [[ -f ${python_dir}/bin/pip3 ]]; then
+                ln -sf ${python_dir}/bin/pip3 /usr/bin/pip3 2>/dev/null || true
+            fi
+        else
+            log_info "使用 ensurepip 安装 pip..."
+            PYTHONHOME=${python_dir} ${python_dir}/bin/python3.8 -m ensurepip --upgrade 2>&1 || {
+                log_warning "ensurepip 失败，尝试使用 get-pip.py..."
+                curl -sSL https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py || {
+                    log_error "下载 get-pip.py 失败"
+                    exit 1
+                }
+                PYTHONHOME=${python_dir} ${python_dir}/bin/python3.8 /tmp/get-pip.py 2>&1 || {
+                    log_error "安装 pip 失败"
+                    exit 1
+                }
+            }
+            
+            # 创建 pip 软链接
+            if [[ -f ${python_dir}/bin/pip3.8 ]]; then
+                ln -sf ${python_dir}/bin/pip3.8 /usr/bin/pip3 2>/dev/null || true
+            elif [[ -f ${python_dir}/bin/pip3 ]]; then
+                ln -sf ${python_dir}/bin/pip3 /usr/bin/pip3 2>/dev/null || true
+            fi
+        fi
+        
+        # 最终验证
+        log_info "最终验证 Python 和 pip..."
         if python3.8 --version 2>&1 | grep -q "3.8"; then
             log_success "Python 3.8 编译安装完成"
             log_info "Python 版本: $(python3.8 --version 2>&1)"
+            
+            if command -v pip3 &> /dev/null; then
+                log_info "pip 版本: $(pip3 --version 2>&1 | head -1)"
+            else
+                log_warning "pip 未正确安装，但 Python 可以使用"
+            fi
         else
             log_error "Python 3.8 安装验证失败"
+            log_info "Python 路径: ${python_dir}/bin/python3.8"
+            log_info "请检查日志文件: /tmp/python_*.log"
             exit 1
         fi
     else
