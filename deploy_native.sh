@@ -807,8 +807,39 @@ setup_python_venv() {
     fi
     
     # 安装依赖（优先使用官方源，因为新版本包可能在镜像源中不可用）
-    if [[ -f requirements.txt ]]; then
+    # 确保在项目根目录
+    local project_dir=$(pwd)
+    local requirements_file="${project_dir}/requirements.txt"
+    
+    # 如果当前目录没有，尝试查找
+    if [[ ! -f "$requirements_file" ]]; then
+        # 尝试从脚本所在目录查找
+        local script_dir=$(dirname "$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")")
+        if [[ -f "${script_dir}/requirements.txt" ]]; then
+            requirements_file="${script_dir}/requirements.txt"
+            cd "$script_dir"
+            project_dir="$script_dir"
+        else
+            log_error "未找到requirements.txt文件"
+            log_info "当前目录: $(pwd)"
+            log_info "请确保在项目根目录运行此脚本，或确保 requirements.txt 文件存在"
+            exit 1
+        fi
+    fi
+    
+    if [[ -f "$requirements_file" ]]; then
         log_info "安装Python依赖包..."
+        log_info "使用 requirements.txt: $requirements_file"
+        
+        # 检查本地包缓存（wheel 文件）
+        log_info "检查本地包缓存..."
+        local cache_dir="${HOME}/.cache/pip/wheels"
+        local has_local_cache=false
+        
+        if [[ -d "$cache_dir" ]] && [[ -n "$(find "$cache_dir" -name "*.whl" 2>/dev/null | head -1)" ]]; then
+            log_info "发现本地包缓存，将优先使用缓存"
+            has_local_cache=true
+        fi
         
         # 检查 pip 配置文件，可能已配置镜像源
         local pip_config_file=""
@@ -848,7 +879,14 @@ setup_python_venv() {
         log_info "尝试使用官方 PyPI 源（推荐，版本最新）..."
         log_info "使用 --index-url 明确指定官方源: https://pypi.org/simple"
         
-        if pip install -r requirements.txt --index-url https://pypi.org/simple --timeout 300 2>&1; then
+        # 如果有本地缓存，使用 --cache-dir 参数
+        local pip_cache_args=""
+        if [[ "$has_local_cache" == "true" ]]; then
+            pip_cache_args="--cache-dir=${HOME}/.cache/pip"
+            log_info "使用本地缓存加速安装"
+        fi
+        
+        if pip install -r "$requirements_file" --index-url https://pypi.org/simple --timeout 300 $pip_cache_args 2>&1; then
             install_success=true
             source_name="官方 PyPI"
         else
@@ -869,7 +907,7 @@ setup_python_venv() {
                 source_name="${pip_source_names[$i]}"
                 
                 log_info "尝试使用镜像源: $source_name ($source_url)"
-                if pip install -r requirements.txt -i "$source_url" --timeout 120 2>&1; then
+                if pip install -r "$requirements_file" -i "$source_url" --timeout 120 $pip_cache_args 2>&1; then
                     install_success=true
                     break
                 fi
@@ -889,15 +927,19 @@ setup_python_venv() {
             log_info ""
             log_info "建议的解决方案:"
             log_info "1. 检查网络连接"
-            log_info "2. 手动安装: pip install -r requirements.txt"
+            log_info "2. 手动安装: pip install -r $requirements_file"
             log_info "3. 如果镜像源版本过旧，必须使用官方源:"
-            log_info "   pip install -r requirements.txt --timeout 300"
+            log_info "   pip install -r $requirements_file --timeout 300"
             exit 1
         fi
     else
-        log_error "未找到requirements.txt文件"
+        log_error "未找到requirements.txt文件: $requirements_file"
+        log_info "当前工作目录: $(pwd)"
         exit 1
     fi
+    
+    # 返回项目目录
+    cd "$project_dir" 2>/dev/null || true
 }
 
 # 创建必要的目录
