@@ -145,36 +145,60 @@ case $REPLY in
     1)
         log_info "使用自动导入模式（跳过已导入的文件）..."
         
-        # 先测试解析一个文件，检查数据格式
+        # 先测试解析一个文件，检查数据格式（使用与导入逻辑相同的解析方法）
         log_info "检查数据文件格式..."
         test_file=$(find "$IMPORT_DIR" -type f \( -name "*.jsonl" -o -name "*.txt" \) ! -name "*.done" | head -n 1)
         if [[ -n "$test_file" ]]; then
-            test_result=$(python3 << PYEOF
+            test_result=$(python3 << 'PYEOF'
 import json
+import re
 import sys
+import os
+
+# 使用与导入逻辑相同的解析方法
+_ST_FIX_RE = re.compile(r'("source_type"\s*:\s*)(gold_league|season_play_pvp_mgr)\b')
+
+def _robust_json_load(line: str):
+    """Try strict JSON first; if failed, fix known patterns then retry."""
+    try:
+        return json.loads(line)
+    except Exception:
+        pass
+    # Fix unquoted source_type tokens
+    fixed = _ST_FIX_RE.sub(lambda m: f"{m.group(1)}\"{m.group(2)}\"", line)
+    if fixed != line:
+        try:
+            return json.loads(fixed)
+        except Exception:
+            return None
+    return None
 
 test_file = '''$test_file'''
 try:
     with open(test_file, 'r', encoding='utf-8') as f:
         line_count = 0
         valid_count = 0
+        error_lines = []
         for line in f:
             line = line.strip()
             if not line:
                 continue
             line_count += 1
-            try:
-                obj = json.loads(line)
-                if isinstance(obj, dict) and 'server' in obj and 'timestamp' in obj:
+            obj = _robust_json_load(line)
+            if obj and isinstance(obj, dict):
+                # 检查必需字段
+                if 'server' in obj and 'timestamp' in obj:
                     valid_count += 1
-            except:
-                pass
+                else:
+                    error_lines.append(f"行{line_count}: 缺少必需字段 (server/timestamp)")
+            else:
+                error_lines.append(f"行{line_count}: JSON解析失败")
             if line_count >= 10:  # 只检查前10行
                 break
         if line_count == 0:
             print("EMPTY")
         elif valid_count == 0:
-            print("INVALID")
+            print(f"INVALID:{'; '.join(error_lines[:3])}")
         else:
             print(f"OK:{valid_count}/{line_count}")
 except Exception as e:
@@ -184,10 +208,17 @@ PYEOF
             if [[ "$test_result" == "EMPTY" ]]; then
                 log_error "数据文件为空: $test_file"
                 exit 1
-            elif [[ "$test_result" == "INVALID" ]]; then
+            elif [[ "$test_result" =~ ^INVALID: ]]; then
                 log_error "数据文件格式无效: $test_file"
-                log_info "请检查文件是否为有效的 JSONL 格式（每行一个 JSON 对象）"
-                exit 1
+                log_info "错误详情: ${test_result#INVALID:}"
+                log_info "提示: 文件应为 JSONL 格式（每行一个 JSON 对象）"
+                log_info "      支持自动修复未加引号的 source_type 字段（gold_league/season_play_pvp_mgr）"
+                log_warning "是否继续尝试导入? (可能会跳过无效行)"
+                read -p "继续? (y/n): " -n 1 -r
+                echo
+                if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+                    exit 1
+                fi
             elif [[ "$test_result" =~ ^ERROR: ]]; then
                 log_error "读取文件失败: ${test_result#ERROR:}"
                 exit 1
