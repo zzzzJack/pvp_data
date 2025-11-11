@@ -9,7 +9,7 @@ from backend.app.database import SessionLocal
 from backend.app.models import MatchRecord
 
 
-_ST_FIX_RE = re.compile(r'("source_type"\s*:\s*)(gold_league|season_play_pvp_mgr)\b')
+_ST_FIX_RE = re.compile(r'("source_type"\s*:\s*)(gold_league|season_play_pvp_mgr|qualifying_wheel_first_combat)\b')
 
 
 def _robust_json_load(line: str) -> Optional[dict]:
@@ -65,26 +65,71 @@ def _parse_exclude_servers() -> Set[int]:
 
 
 def _normalize_source_type(value, obj) -> int:
+    """规范化数据源类型
+    - 数据源同时包含 is_win 和 duration 字段
+    - 计算胜率时使用 is_win 字段：
+      * gold_league -> 1 (冠军联赛胜率)
+      * season -> 3 (决斗天梯胜率)
+      * qualifying_wheel_first_combat -> 2 (武道大会(车轮战首场)胜率)
+    - 计算时长时使用 duration 字段：
+      * gold_league -> 4 (冠军联赛战斗时长)
+      * season -> 6 (决斗天梯战斗时长)
+      * qualifying_wheel_first_combat -> 5 (武道大会(车轮战首场)战斗时长)
+    - 如果两个字段都有效，根据环境变量优先级决定
+    """
     if isinstance(value, int):
         return value
     if isinstance(value, str):
         v = value.strip().lower()
-        has_win = obj.get("is_win") is not None
-        has_duration = obj.get("duration") is not None and obj.get("duration") is not False
+        # 检查 is_win 是否有效：不为 None 且为 0 或 1
+        is_win_val = obj.get("is_win")
+        has_valid_win = is_win_val is not None and is_win_val in (0, 1)
+        # 检查 duration 是否有效：不为 None，不为 False，且 > 0
+        duration_val = obj.get("duration")
+        has_valid_duration = (duration_val is not None 
+                             and duration_val is not False 
+                             and isinstance(duration_val, (int, float)) 
+                             and duration_val > 0)
+        
         if v in {"gold_league", "gold-league", "champion_league", "goldleague"}:
             prefer = os.environ.get("DEFAULT_GOLD_LEAGUE_METRIC", "winrate").lower()
-            if has_win and not has_duration:
+            # 只有 is_win 有效，返回胜率类型
+            if has_valid_win and not has_valid_duration:
                 return 1
-            if has_duration and not has_win:
+            # 只有 duration 有效，返回时长类型
+            if has_valid_duration and not has_valid_win:
                 return 4
-            return 1 if prefer == "winrate" else 4
+            # 两个都有效，根据环境变量优先级决定
+            if has_valid_win and has_valid_duration:
+                return 1 if prefer == "winrate" else 4
+            # 两个都无效，默认返回胜率类型
+            return 1
         if v in {"season_play_pvp_mgr", "season", "ladder", "pvp_ladder"}:
             prefer = os.environ.get("DEFAULT_SEASON_METRIC", "winrate").lower()
-            if has_win and not has_duration:
+            # 只有 is_win 有效，返回胜率类型
+            if has_valid_win and not has_valid_duration:
                 return 3
-            if has_duration and not has_win:
+            # 只有 duration 有效，返回时长类型
+            if has_valid_duration and not has_valid_win:
                 return 6
-            return 3 if prefer == "winrate" else 6
+            # 两个都有效，根据环境变量优先级决定
+            if has_valid_win and has_valid_duration:
+                return 3 if prefer == "winrate" else 6
+            # 两个都无效，默认返回胜率类型
+            return 3
+        if v in {"qualifying_wheel_first_combat", "qualifying-wheel-first-combat", "wheel_first"}:
+            prefer = os.environ.get("DEFAULT_QUALIFYING_WHEEL_METRIC", "winrate").lower()
+            # 只有 is_win 有效，返回胜率类型
+            if has_valid_win and not has_valid_duration:
+                return 2
+            # 只有 duration 有效，返回时长类型
+            if has_valid_duration and not has_valid_win:
+                return 5
+            # 两个都有效，根据环境变量优先级决定
+            if has_valid_win and has_valid_duration:
+                return 2 if prefer == "winrate" else 5
+            # 两个都无效，默认返回胜率类型
+            return 2
     try:
         return int(value)
     except Exception:
