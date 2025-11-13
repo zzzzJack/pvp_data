@@ -77,8 +77,10 @@ def query_winrate(db: Session,
     sort_param = filters.pop('sort', None)
     # 分组字段：是否细分到对手职业与流派
     # 区服合并：8001/8002/8004 合并为同一组（以8001代表）
+    # 区服合并：8024/8027 合并为同一组（以8024代表）
     server_group = case(
         (MatchRecord.server.in_([8001, 8002, 8004]), 8001),
+        (MatchRecord.server.in_([8024, 8027]), 8024),
         else_=MatchRecord.server,
     ).label('server_group')
     group_cols = [
@@ -123,8 +125,11 @@ def query_duration(db: Session,
                    **filters):
     # 提前取出排序参数，避免传入通用过滤器
     sort_param = filters.pop('sort', None)
+    # 区服合并：8001/8002/8004 合并为同一组（以8001代表）
+    # 区服合并：8024/8027 合并为同一组（以8024代表）
     server_group = case(
         (MatchRecord.server.in_([8001, 8002, 8004]), 8001),
+        (MatchRecord.server.in_([8024, 8027]), 8024),
         else_=MatchRecord.server,
     ).label('server_group')
     group_cols = [
