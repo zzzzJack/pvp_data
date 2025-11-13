@@ -71,6 +71,72 @@ export POSTGRES_USER="${POSTGRES_USER:-app}"
 export POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-app}"
 export POSTGRES_DB="${POSTGRES_DB:-pvp}"
 
+# 查询当前数据库记录数
+log_info "查询当前数据库记录数..."
+old_count=$(python3 << 'PYEOF'
+import os
+from sqlalchemy import text
+from backend.app.database import SessionLocal
+
+os.environ.setdefault('POSTGRES_HOST', 'localhost')
+os.environ.setdefault('POSTGRES_PORT', '5432')
+os.environ.setdefault('POSTGRES_USER', 'app')
+os.environ.setdefault('POSTGRES_PASSWORD', 'app')
+os.environ.setdefault('POSTGRES_DB', 'pvp')
+
+try:
+    with SessionLocal() as db:
+        result = db.execute(text("SELECT COUNT(*) FROM match_records;"))
+        total = result.scalar()
+        print(total)
+except Exception as e:
+    print("0")
+PYEOF
+)
+
+if [[ "$old_count" -gt 0 ]]; then
+    log_warning "数据库当前有 $old_count 条记录"
+    echo ""
+    read -p "是否清空数据库中的所有旧数据？(y/n): " -n 1 -r
+    echo ""
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        log_info "取消清空数据库，但将继续导入（可能导致重复数据）"
+    else
+        # 清空数据库中的旧数据
+        log_warning "正在清空数据库中的旧数据..."
+        python3 << 'PYEOF'
+import os
+from sqlalchemy import text
+from backend.app.database import engine
+
+os.environ.setdefault('POSTGRES_HOST', 'localhost')
+os.environ.setdefault('POSTGRES_PORT', '5432')
+os.environ.setdefault('POSTGRES_USER', 'app')
+os.environ.setdefault('POSTGRES_PASSWORD', 'app')
+os.environ.setdefault('POSTGRES_DB', 'pvp')
+
+try:
+    with engine.connect() as conn:
+        # 清空表
+        conn.execute(text("TRUNCATE TABLE match_records;"))
+        conn.commit()
+        print("数据库表已清空")
+except Exception as e:
+    print(f"清空数据库失败: {e}")
+    import sys
+    sys.exit(1)
+PYEOF
+
+        if [[ $? -ne 0 ]]; then
+            log_error "清空数据库失败，终止导入"
+            exit 1
+        fi
+        log_success "已清空 $old_count 条旧记录"
+    fi
+else
+    log_info "数据库中没有旧记录，无需清空"
+fi
+
 # 开始导入
 log_info "开始导入数据..."
 python3 << 'PYEOF'
