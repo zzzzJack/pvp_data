@@ -64,9 +64,9 @@ def _parse_exclude_servers() -> Set[int]:
     return result
 
 
-def _normalize_source_type(value, obj) -> int:
-    """规范化数据源类型
-    - 数据源同时包含 is_win 和 duration 字段
+def _get_source_types(value, obj) -> List[int]:
+    """获取数据源类型列表（可能返回多个类型）
+    - 数据源同时包含 is_win 和 duration 字段时，返回两个类型
     - 计算胜率时使用 is_win 字段：
       * gold_league -> 1 (冠军联赛胜率)
       * season -> 3 (决斗天梯胜率)
@@ -75,10 +75,11 @@ def _normalize_source_type(value, obj) -> int:
       * gold_league -> 4 (冠军联赛战斗时长)
       * season -> 6 (决斗天梯战斗时长)
       * qualifying_wheel_first_combat -> 5 (武道大会(车轮战首场)战斗时长)
-    - 如果两个字段都有效，根据环境变量优先级决定
+    - 返回列表，可能包含一个或两个类型
     """
+    result = []
     if isinstance(value, int):
-        return value
+        return [value]
     if isinstance(value, str):
         v = value.strip().lower()
         # 检查 is_win 是否有效：不为 None 且为 0 或 1
@@ -92,48 +93,54 @@ def _normalize_source_type(value, obj) -> int:
                              and duration_val > 0)
         
         if v in {"gold_league", "gold-league", "champion_league", "goldleague"}:
-            prefer = os.environ.get("DEFAULT_GOLD_LEAGUE_METRIC", "winrate").lower()
-            # 只有 is_win 有效，返回胜率类型
-            if has_valid_win and not has_valid_duration:
-                return 1
-            # 只有 duration 有效，返回时长类型
-            if has_valid_duration and not has_valid_win:
-                return 4
-            # 两个都有效，根据环境变量优先级决定
-            if has_valid_win and has_valid_duration:
-                return 1 if prefer == "winrate" else 4
-            # 两个都无效，默认返回胜率类型
-            return 1
-        if v in {"season_play_pvp_mgr", "season", "ladder", "pvp_ladder"}:
-            prefer = os.environ.get("DEFAULT_SEASON_METRIC", "winrate").lower()
-            # 只有 is_win 有效，返回胜率类型
-            if has_valid_win and not has_valid_duration:
-                return 3
-            # 只有 duration 有效，返回时长类型
-            if has_valid_duration and not has_valid_win:
-                return 6
-            # 两个都有效，根据环境变量优先级决定
-            if has_valid_win and has_valid_duration:
-                return 3 if prefer == "winrate" else 6
-            # 两个都无效，默认返回胜率类型
-            return 3
-        if v in {"qualifying_wheel_first_combat", "qualifying-wheel-first-combat", "wheel_first"}:
-            prefer = os.environ.get("DEFAULT_QUALIFYING_WHEEL_METRIC", "winrate").lower()
-            # 只有 is_win 有效，返回胜率类型
-            if has_valid_win and not has_valid_duration:
-                return 2
-            # 只有 duration 有效，返回时长类型
-            if has_valid_duration and not has_valid_win:
-                return 5
-            # 两个都有效，根据环境变量优先级决定
-            if has_valid_win and has_valid_duration:
-                return 2 if prefer == "winrate" else 5
-            # 两个都无效，默认返回胜率类型
-            return 2
-    try:
-        return int(value)
-    except Exception:
-        return 0
+            # 如果 is_win 有效，添加胜率类型
+            if has_valid_win:
+                result.append(1)
+            # 如果 duration 有效，添加时长类型
+            if has_valid_duration:
+                result.append(4)
+            # 如果两个都无效，默认返回胜率类型
+            if not result:
+                result.append(1)
+        elif v in {"season_play_pvp_mgr", "season", "ladder", "pvp_ladder"}:
+            # 如果 is_win 有效，添加胜率类型
+            if has_valid_win:
+                result.append(3)
+            # 如果 duration 有效，添加时长类型
+            if has_valid_duration:
+                result.append(6)
+            # 如果两个都无效，默认返回胜率类型
+            if not result:
+                result.append(3)
+        elif v in {"qualifying_wheel_first_combat", "qualifying-wheel-first-combat", "wheel_first"}:
+            # 如果 is_win 有效，添加胜率类型
+            if has_valid_win:
+                result.append(2)
+            # 如果 duration 有效，添加时长类型
+            if has_valid_duration:
+                result.append(5)
+            # 如果两个都无效，默认返回胜率类型
+            if not result:
+                result.append(2)
+        else:
+            # 未知类型，尝试转换为整数
+            try:
+                result.append(int(value))
+            except Exception:
+                result.append(0)
+    else:
+        try:
+            result.append(int(value))
+        except Exception:
+            result.append(0)
+    
+    return result if result else [0]
+
+
+def _normalize_source_type(value, obj) -> int:
+    """规范化数据源类型（兼容旧代码，返回第一个类型）"""
+    types = _get_source_types(value, obj)
+    return types[0] if types else 0
 
 
 def _bulk_insert_file(db: Session, file_path: str, batch_size: int = 2000) -> int:
@@ -148,24 +155,27 @@ def _bulk_insert_file(db: Session, file_path: str, batch_size: int = 2000) -> in
             continue
         if server_val in exclude_servers:
             continue
-        # source_type 规范化
-        obj["source_type"] = _normalize_source_type(obj.get("source_type"), obj)
-        buf.append(MatchRecord(
-            server=obj["server"],
-            timestamp=obj["timestamp"],
-            level=obj["level"],
-            clazz=obj["class"],
-            schools=obj["schools"],
-            opponent_class=obj.get("opponent_class", 0),
-            opponent_schools=obj.get("opponent_schools", 0),
-            is_win=obj.get("is_win", 0),
-            duration=obj.get("duration", 0),
-            spirit_animal=obj.get("spirit_animal"),
-            spirit_animal_talents=obj.get("spirit_animal_talents"),
-            legendary_runes=obj.get("legendary_runes"),
-            super_armor=obj.get("super_armor"),
-            source_type=obj.get("source_type", 0),
-        ))
+        # source_type 规范化 - 可能返回多个类型（胜率和时长）
+        source_types = _get_source_types(obj.get("source_type"), obj)
+        
+        # 为每个 source_type 创建一条记录
+        for source_type in source_types:
+            buf.append(MatchRecord(
+                server=obj["server"],
+                timestamp=obj["timestamp"],
+                level=obj["level"],
+                clazz=obj["class"],
+                schools=obj["schools"],
+                opponent_class=obj.get("opponent_class", 0),
+                opponent_schools=obj.get("opponent_schools", 0),
+                is_win=obj.get("is_win", 0),
+                duration=obj.get("duration", 0),
+                spirit_animal=obj.get("spirit_animal"),
+                spirit_animal_talents=obj.get("spirit_animal_talents"),
+                legendary_runes=obj.get("legendary_runes"),
+                super_armor=obj.get("super_armor"),
+                source_type=source_type,
+            ))
         if len(buf) >= batch_size:
             db.bulk_save_objects(buf)
             db.commit()

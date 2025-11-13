@@ -28,40 +28,86 @@ def _parse_exclude_servers() -> Set[int]:
     return result
 
 
-def _normalize_source_type(value, obj) -> int:
-    """Accept int or known strings and map to existing numeric enums.
-    - gold_league: winrate->1, duration->4
-    - season_play_pvp_mgr: winrate->3, duration->6
-    Heuristic: if DEFAULT_*_METRIC env provided, prefer it when both metrics present.
+def _get_source_types(value, obj) -> List[int]:
+    """获取数据源类型列表（可能返回多个类型）
+    - 数据源同时包含 is_win 和 duration 字段时，返回两个类型
+    - 计算胜率时使用 is_win 字段：
+      * gold_league -> 1 (冠军联赛胜率)
+      * season -> 3 (决斗天梯胜率)
+      * qualifying_wheel_first_combat -> 2 (武道大会(车轮战首场)胜率)
+    - 计算时长时使用 duration 字段：
+      * gold_league -> 4 (冠军联赛战斗时长)
+      * season -> 6 (决斗天梯战斗时长)
+      * qualifying_wheel_first_combat -> 5 (武道大会(车轮战首场)战斗时长)
+    - 返回列表，可能包含一个或两个类型
     """
+    result = []
     if isinstance(value, int):
-        return value
+        return [value]
     if isinstance(value, str):
         v = value.strip().lower()
-        has_win = obj.get("is_win") is not None
-        has_duration = obj.get("duration") is not None and obj.get("duration") is not False
+        # 检查 is_win 是否有效：不为 None 且为 0 或 1
+        is_win_val = obj.get("is_win")
+        has_valid_win = is_win_val is not None and is_win_val in (0, 1)
+        # 检查 duration 是否有效：不为 None，不为 False，且 > 0
+        duration_val = obj.get("duration")
+        has_valid_duration = (duration_val is not None 
+                             and duration_val is not False 
+                             and isinstance(duration_val, (int, float)) 
+                             and duration_val > 0)
+        
         if v in {"gold_league", "gold-league", "champion_league", "goldleague"}:
-            prefer = os.environ.get("DEFAULT_GOLD_LEAGUE_METRIC", "winrate").lower()
-            if has_win and not has_duration:
-                return 1
-            if has_duration and not has_win:
-                return 4
-            return 1 if prefer == "winrate" else 4
-        if v in {"season_play_pvp_mgr", "season", "ladder", "pvp_ladder"}:
-            prefer = os.environ.get("DEFAULT_SEASON_METRIC", "winrate").lower()
-            if has_win and not has_duration:
-                return 3
-            if has_duration and not has_win:
-                return 6
-            return 3 if prefer == "winrate" else 6
-    # Fallback
-    try:
-        return int(value)
-    except Exception:
-        return 0
+            # 如果 is_win 有效，添加胜率类型
+            if has_valid_win:
+                result.append(1)
+            # 如果 duration 有效，添加时长类型
+            if has_valid_duration:
+                result.append(4)
+            # 如果两个都无效，默认返回胜率类型
+            if not result:
+                result.append(1)
+        elif v in {"season_play_pvp_mgr", "season", "ladder", "pvp_ladder"}:
+            # 如果 is_win 有效，添加胜率类型
+            if has_valid_win:
+                result.append(3)
+            # 如果 duration 有效，添加时长类型
+            if has_valid_duration:
+                result.append(6)
+            # 如果两个都无效，默认返回胜率类型
+            if not result:
+                result.append(3)
+        elif v in {"qualifying_wheel_first_combat", "qualifying-wheel-first-combat", "wheel_first"}:
+            # 如果 is_win 有效，添加胜率类型
+            if has_valid_win:
+                result.append(2)
+            # 如果 duration 有效，添加时长类型
+            if has_valid_duration:
+                result.append(5)
+            # 如果两个都无效，默认返回胜率类型
+            if not result:
+                result.append(2)
+        else:
+            # 未知类型，尝试转换为整数
+            try:
+                result.append(int(value))
+            except Exception:
+                result.append(0)
+    else:
+        try:
+            result.append(int(value))
+        except Exception:
+            result.append(0)
+    
+    return result if result else [0]
 
 
-_ST_FIX_RE = re.compile(r'("source_type"\s*:\s*)(gold_league|season_play_pvp_mgr)\b')
+def _normalize_source_type(value, obj) -> int:
+    """规范化数据源类型（兼容旧代码，返回第一个类型）"""
+    types = _get_source_types(value, obj)
+    return types[0] if types else 0
+
+
+_ST_FIX_RE = re.compile(r'("source_type"\s*:\s*)(gold_league|season_play_pvp_mgr|qualifying_wheel_first_combat)\b')
 
 
 def _robust_json_load(line: str) -> Optional[dict]:
@@ -118,9 +164,13 @@ def load_jsonl_files(logs_dir: str) -> List[dict]:
                             continue
                         if server_val in exclude_servers:
                             continue
-                        # 映射 source_type
-                        obj["source_type"] = _normalize_source_type(obj.get("source_type"), obj)
-                        records.append(obj)
+                        # 映射 source_type - 可能返回多个类型（胜率和时长）
+                        # 为每个类型创建一条记录
+                        source_types = _get_source_types(obj.get("source_type"), obj)
+                        for source_type in source_types:
+                            obj_copy = obj.copy()
+                            obj_copy["source_type"] = source_type
+                            records.append(obj_copy)
                     except Exception:
                         continue
     return records
