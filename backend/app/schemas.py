@@ -13,6 +13,21 @@ SERVER_MAP = {
     8010: "公会服"
 }
 
+def get_server_name(server_id: int) -> str:
+    """获取服务器名称，支持合并逻辑的兜底"""
+    # 先尝试直接查找
+    name = SERVER_MAP.get(server_id)
+    if name:
+        return name
+    # 如果找不到，尝试合并逻辑的映射
+    # 8024/8027 合并为 8024
+    if server_id == 8027:
+        return SERVER_MAP.get(8024, f"未知区服({server_id})")
+    # 8001/8002/8004 合并为 8001
+    if server_id in [8002, 8004]:
+        return SERVER_MAP.get(8001, f"未知区服({server_id})")
+    return f"未知区服({server_id})"
+
 # 职业映射
 CLASS_MAP = {
     1: "法师", 2: "弓手", 3: "圣言", 4: "剑骑士", 5: "隐刺",

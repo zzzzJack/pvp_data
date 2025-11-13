@@ -9,7 +9,7 @@ import io
 
 from backend.app.database import engine, Base, get_db
 from backend.app import crud
-from backend.app.schemas import SERVER_MAP, SCHOOLS_MAP, SOURCE_TYPE_MAP, get_class_school_name
+from backend.app.schemas import SERVER_MAP, SCHOOLS_MAP, SOURCE_TYPE_MAP, get_class_school_name, get_server_name
 from sqlalchemy.orm import Session
 import os
 
@@ -139,7 +139,7 @@ def stats_winrate(
         # r 是元组，包含分组列与聚合列
         record = {
             "server": r[0],
-            "server_name": SERVER_MAP.get(r[0], f"未知区服({r[0]})"),
+            "server_name": get_server_name(r[0]),
             "class": r[1],
             "schools": r[2],
             "class_schools_name": get_class_school_name(r[1], r[2]),
@@ -201,7 +201,7 @@ def stats_duration(
     for r in result:
         record = {
             "server": r[0],
-            "server_name": SERVER_MAP.get(r[0], f"未知区服({r[0]})"),
+            "server_name": get_server_name(r[0]),
             "class": r[1],
             "schools": r[2],
             "class_schools_name": get_class_school_name(r[1], r[2]),
