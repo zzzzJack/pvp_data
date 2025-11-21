@@ -18,7 +18,8 @@ def _apply_common_filters(q,
                           spirit_animal_talents: Optional[int] = None,
                           legendary_runes: Optional[List[int]] = None,
                           super_armor: Optional[int] = None,
-                          source_types: Optional[List[int]] = None):
+                          source_types: Optional[List[int]] = None,
+                          score_ratio: Optional[int] = None):
     if servers:
         q = q.where(MatchRecord.server.in_(servers))
     if start_ts is not None:
@@ -52,6 +53,8 @@ def _apply_common_filters(q,
         q = q.where(MatchRecord.super_armor == super_armor)
     if source_types:
         q = q.where(MatchRecord.source_type.in_(source_types))
+    if score_ratio is not None:
+        q = q.where(MatchRecord.score_ratio >= score_ratio)
     return q
 
 
@@ -108,6 +111,7 @@ def query_winrate(db: Session,
         'opponent_class': MatchRecord.opponent_class,
         'opponent_schools': MatchRecord.opponent_schools,
         'source_type': MatchRecord.source_type,
+        'score_ratio': MatchRecord.score_ratio,
         'win_count': win_count,
         'lose_count': lose_count,
         'match_count': match_count,
@@ -158,6 +162,7 @@ def query_duration(db: Session,
         'opponent_class': MatchRecord.opponent_class,
         'opponent_schools': MatchRecord.opponent_schools,
         'source_type': MatchRecord.source_type,
+        'score_ratio': MatchRecord.score_ratio,
         'avg_duration': avg_duration,
         'max_duration': max_duration,
         'min_duration': min_duration,

@@ -175,6 +175,7 @@ def _bulk_insert_file(db: Session, file_path: str, batch_size: int = 2000) -> in
                 legendary_runes=obj.get("legendary_runes"),
                 super_armor=obj.get("super_armor"),
                 source_type=source_type,
+                score_ratio=obj.get("score_ratio", 0),
             ))
         if len(buf) >= batch_size:
             db.bulk_save_objects(buf)

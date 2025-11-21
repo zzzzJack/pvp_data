@@ -194,6 +194,7 @@ def bulk_insert(db: Session, rows: List[dict], batch_size: int = 2000):
             legendary_runes=obj.get("legendary_runes"),
             super_armor=obj.get("super_armor"),
             source_type=obj.get("source_type", 0),
+            score_ratio=obj.get("score_ratio", 0),
         ))
         if len(buf) >= batch_size:
             db.bulk_save_objects(buf)

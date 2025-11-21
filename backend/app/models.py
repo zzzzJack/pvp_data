@@ -35,6 +35,7 @@ class MatchRecord(Base):
 
     # 来源类型：1..8
     source_type = Column(SmallInteger, nullable=False)
+    score_ratio = Column(Integer, nullable=False, default=0)  # 千分比
 
 
 # 常用组合索引
@@ -44,6 +45,7 @@ Index("ix_records_level", MatchRecord.level)
 Index("ix_records_class_school", MatchRecord.clazz, MatchRecord.schools)
 Index("ix_records_opp_class_school", MatchRecord.opponent_class, MatchRecord.opponent_schools)
 Index("ix_records_source_type", MatchRecord.source_type)
+Index("ix_records_score_ratio", MatchRecord.score_ratio)
 
 
 # Helper views as tables for querying (created via SQL in scripts/migration_001_views.sql)

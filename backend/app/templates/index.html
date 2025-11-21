@@ -60,6 +60,16 @@
           <!-- 动态生成选项 -->
         </select>
       </div>
+
+      <div class="filter-group">
+        <label class="form-label">战力差 (ScoreRatio)</label>
+        <select id="score_ratio" class="form-select">
+          <option value="0">无</option>
+          <option value="950">战力差5% (>= 950)</option>
+          <option value="970">战力差3% (>= 970)</option>
+          <option value="980">战力差2% (>= 980)</option>
+        </select>
+      </div>
       
       <div class="filter-group">
         <label class="form-label">时间范围(开始)</label>
@@ -342,6 +352,12 @@
       setMultiple('legendary_runes', getMulti('legendary_runes'));
       setIf('super_armor', get('super_armor'));
       setIf('source_types', get('source_types'));
+      
+      const scoreRatio = document.getElementById('score_ratio').value;
+      if (scoreRatio && scoreRatio !== '0') {
+        params.set('score_ratio', scoreRatio);
+      }
+
       const gbo = document.getElementById('group_by_opponent').value;
       params.set('group_by_opponent', gbo);
       return params;
