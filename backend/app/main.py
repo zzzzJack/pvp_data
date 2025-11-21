@@ -113,6 +113,7 @@ def stats_winrate(
     legendary_runes: Optional[str] = None,
     super_armor: Optional[int] = None,
     source_types: Optional[str] = None,
+    score_ratio: Optional[int] = None,
     sort: Optional[str] = None,
     group_by_opponent: bool = False,
     db: Session = Depends(get_db),
@@ -131,6 +132,7 @@ def stats_winrate(
         legendary_runes=_parse_int_list(legendary_runes),
         super_armor=super_armor,
         source_types=_parse_int_list(source_types),
+        score_ratio=score_ratio,
         sort=sort,
     )
 
@@ -195,6 +197,7 @@ def stats_duration(
         legendary_runes=_parse_int_list(legendary_runes),
         super_armor=super_armor,
         source_types=_parse_int_list(source_types),
+        score_ratio=score_ratio,
         sort=sort,
     )
 
