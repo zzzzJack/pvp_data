@@ -1,5 +1,12 @@
 import os
 import sys
+from pathlib import Path
+
+# 添加项目根目录到 Python 路径
+script_dir = Path(__file__).parent
+project_root = script_dir.parent
+sys.path.insert(0, str(project_root))
+
 from sqlalchemy import text
 from backend.app.database import engine, Base
 from backend.app.models import MatchRecord
@@ -31,7 +38,5 @@ def reset_schema():
         sys.exit(1)
 
 if __name__ == "__main__":
-    # Ensure we are in the root directory or backend is in path
-    sys.path.append(os.getcwd())
     reset_schema()
 
