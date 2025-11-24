@@ -15,6 +15,7 @@ import os
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from backend.app.auto_importer import run_import_once
+from backend.app.incremental_importer import run_incremental_import
 
 
 app = FastAPI(default_response_class=JSONResponse)
@@ -43,9 +44,10 @@ def _start_scheduler():
             interval = 300
         logs_dir = os.environ.get('IMPORT_DIR', 'data_logs')
         _scheduler = BackgroundScheduler()
-        _scheduler.add_job(lambda: run_import_once(logs_dir), 'interval', seconds=interval, id='auto_import', max_instances=1, coalesce=True)
+        # 使用增量导入，支持追加日志文件
+        _scheduler.add_job(lambda: run_incremental_import(logs_dir), 'interval', seconds=interval, id='auto_import', max_instances=1, coalesce=True)
         _scheduler.start()
-        print(f"Scheduler started with interval {interval}s, logs_dir={logs_dir}")
+        print(f"Scheduler started with interval {interval}s (incremental import), logs_dir={logs_dir}")
     except Exception as e:
         print(f"Warning: Failed to start scheduler: {e}")
         print("Application will continue without auto-import")
@@ -84,8 +86,15 @@ def health_db(db: Session = Depends(get_db)):
 
 @app.post("/api/admin/import_once")
 def import_once():
+    """手动触发增量导入（推荐，支持追加日志）"""
+    count = run_incremental_import(os.environ.get('IMPORT_DIR', 'data_logs'))
+    return {"imported": count, "type": "incremental"}
+
+@app.post("/api/admin/import_full")
+def import_full():
+    """手动触发全量导入（使用旧的 .done 标记方式）"""
     count = run_import_once(os.environ.get('IMPORT_DIR', 'data_logs'))
-    return {"imported": count}
+    return {"imported": count, "type": "full"}
 
 
 def _parse_int_list(csv_str: Optional[str]) -> Optional[List[int]]:
